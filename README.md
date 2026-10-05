@@ -8,7 +8,7 @@ Install Docker Desktop with Linux containers, then run from this folder:
 docker compose up -d --build
 ```
 
-Open http://localhost:5000 and choose **Sign in with Keycloak**.
+Open http://localhost:5000. Visitors are automatically redirected to the Keycloak login page. After signing in, the application home page opens. Signing out returns to the login page.
 
 - Demo username: `demo`
 - Demo password: `Demo123!`

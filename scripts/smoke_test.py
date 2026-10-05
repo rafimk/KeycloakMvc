@@ -17,18 +17,21 @@ def post(url, fields):
     return browser.open(url, urllib.parse.urlencode(fields).encode(), timeout=30)
 
 assert get("http://localhost:5000/health").status == 200
-login = get("http://localhost:5000/Account/Profile")
+login = get("http://localhost:5000/")
 assert login.url.startswith("http://localhost:8080/")
 page = login.read().decode()
 action = html.unescape(re.search(r'<form[^>]*action="([^"]+)"', page).group(1))
 profile = post(action, {"username": "demo", "password": "Demo123!", "credentialId": ""})
 body = profile.read().decode()
-assert profile.url == "http://localhost:5000/Account/Profile", profile.url
+assert profile.url == "http://localhost:5000/", profile.url
+profile = get("http://localhost:5000/Account/Profile")
+body = profile.read().decode()
 assert "Signed in as <strong>demo</strong>" in body, "Login did not reach authenticated profile"
 token = html.unescape(re.search(r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', body).group(1))
 logout = post("http://localhost:5000/Account/Logout", {"__RequestVerificationToken": token})
 body = logout.read().decode()
-assert "Sign in with Keycloak" in body, "Logout did not clear application session"
+assert logout.url.startswith("http://localhost:8080/"), "Logout did not return to login"
+assert 'name="password"' in body, "Logout did not clear the Keycloak session"
 login = get("http://localhost:5000/Account/Profile")
 assert login.url.startswith("http://localhost:8080/")
 assert 'name="password"' in login.read().decode(), "Keycloak session survived logout"
