@@ -1,0 +1,37 @@
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.0
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin-local-password
+      KC_HOSTNAME: http://localhost:8080
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./keycloak/mvc-sample-realm.json:/opt/keycloak/data/import/mvc-sample-realm.json:ro
+      - keycloak-data:/opt/keycloak/data
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000; printf 'GET /health/ready HTTP/1.0\r\n\r\n' >&3; grep -q '200 OK' <&3"]
+      interval: 10s
+      timeout: 5s
+      start_period: 60s
+      retries: 12
+  mvc:
+    build: .
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_HTTP_PORTS: "8080"
+      Keycloak__MetadataAddress: http://keycloak:8080/realms/mvc-sample/.well-known/openid-configuration
+    ports:
+      - "127.0.0.1:5000:8080"
+    volumes:
+      - mvc-keys:/home/app/.aspnet/DataProtection-Keys
+    depends_on:
+      keycloak:
+        condition: service_healthy
+volumes:
+  keycloak-data:
+  mvc-keys:
