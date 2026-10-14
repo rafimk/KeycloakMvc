@@ -58,8 +58,19 @@ By default, browsers refuse to show the app or the Keycloak login inside another
    - `contentSecurityPolicy` is `frame-src 'self'; frame-ancestors 'self' http://localhost:5500; object-src 'none';`
    - `xFrameOptions` is empty, which removes the header.
 
-   The admin console has the same settings under Realm settings → Security defenses → Headers.
-2. **Apply to an existing realm.** Realm import skips an existing realm, so update the running realm with the admin CLI (Git Bash):
+2. **Apply to an existing realm.** Realm import skips an existing realm, so update the running realm either in the admin console or with the admin CLI.
+
+   **Admin console:**
+   1. Open http://localhost:8080/admin and sign in as `admin` / `admin-local-password`.
+   2. Select the **mvc-sample** realm from the realm dropdown at the top left.
+   3. Go to **Realm settings** → **Security defenses** → **Headers**.
+   4. Clear **X-Frame-Options**.
+   5. Set **Content-Security-Policy** to `frame-src 'self'; frame-ancestors 'self' http://localhost:5500; object-src 'none';`
+   6. Click **Save**. The change takes effect immediately.
+
+   To allow more host pages, add their origins after `'self'`, separated by spaces. Console changes are stored only in Keycloak's database, so keep `mvc-sample-realm.json` in sync.
+
+   **Admin CLI (Git Bash):**
 
    ```bash
    MSYS_NO_PATHCONV=1 docker compose exec -T keycloak bash -c '
@@ -81,8 +92,52 @@ By default, browsers refuse to show the app or the Keycloak login inside another
 
    For Docker you can also set them as environment variables, for example `FrameAncestors__0=http://localhost:5500`.
 5. **Rebuild the app.** Run `docker compose up -d --build mvc`.
+6. **Host page.** The page that embeds the app needs no special configuration. A plain iframe is enough:
+
+   ```html
+   <iframe src="http://localhost:5000/" style="width: 100%; height: 600px; border: 0"></iframe>
+   ```
+
+   If you add a `sandbox` attribute, include at least `allow-scripts allow-forms allow-same-origin`. Without these, the login form cannot submit and cookies are not sent.
 
 To use a different host origin, change it in both the realm CSP and `FrameAncestors`. Allow only trusted origins, because framing the login page weakens clickjacking protection. Cross-site embedding on a different domain additionally requires HTTPS and `SameSite=None; Secure` cookies, and browsers that block third-party cookies may still break it. Prefer a popup or top-level login in that case.
+
+### Red Hat SSO
+
+The Red Hat build of Keycloak works like this sample, so the steps above apply unchanged.
+
+Red Hat Single Sign-On 7.x uses the same realm headers and the same MVC changes, with these differences:
+
+| What | This sample (Keycloak 26) | RH-SSO 7.x |
+|---|---|---|
+| Admin console | `http://host:8080/admin` | `http://host:8080/auth/admin` |
+| Realm URL / MVC `Keycloak:Authority` | `http://host:8080/realms/mvc-sample` | `http://host:8080/auth/realms/mvc-sample` |
+| `kcadm.sh` server URL | `http://localhost:8080` | `http://localhost:8080/auth` |
+| `kcadm.sh` path | `/opt/keycloak/bin/kcadm.sh` | `$RHSSO_HOME/bin/kcadm.sh` (OpenShift image: `/opt/eap/bin/kcadm.sh`) |
+| Realm JSON import | `--import-realm` on startup | Admin console **Add realm → Import**, or the `keycloak.import` system property |
+| Hostname settings | `KC_HOSTNAME` environment variables | Server configuration (`standalone.xml` or the operator) |
+
+The `browserSecurityHeaders` block in `mvc-sample-realm.json` uses the same keys in RH-SSO.
+
+**RH-SSO admin console:**
+1. Open `http://host:8080/auth/admin` and sign in as an administrator.
+2. Hover over the realm name at the top left and select **mvc-sample**.
+3. In the left menu under **Configure**, click **Realm Settings**.
+4. Open the **Security Defenses** tab, then the **Headers** sub-tab.
+5. Clear **X-Frame-Options**.
+6. Set **Content-Security-Policy** to `frame-src 'self'; frame-ancestors 'self' http://localhost:5500; object-src 'none';`
+7. Click **Save**.
+
+**RH-SSO admin CLI:**
+
+```bash
+$RHSSO_HOME/bin/kcadm.sh config credentials --server http://localhost:8080/auth --realm master --user admin --password <password>
+$RHSSO_HOME/bin/kcadm.sh update realms/mvc-sample \
+  -s "browserSecurityHeaders.contentSecurityPolicy=frame-src 'self'; frame-ancestors 'self' http://localhost:5500; object-src 'none';" \
+  -s "browserSecurityHeaders.xFrameOptions="
+```
+
+In the MVC app, point `Keycloak:Authority` (and `Keycloak:MetadataAddress`, if set) at the `/auth/realms/...` URL. `FrameAncestors` and the antiforgery change stay the same. Real RH-SSO deployments usually run on HTTPS and on a different domain from the host page. Embedding then also depends on the browser allowing third-party cookies, so a popup or top-level login is more reliable.
 
 ## Development only
 
