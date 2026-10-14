@@ -3,6 +3,14 @@
   "enabled": true,
   "sslRequired": "none",
   "registrationAllowed": false,
+  "browserSecurityHeaders": {
+    "contentSecurityPolicy": "frame-src 'self'; frame-ancestors 'self' http://localhost:5500; object-src 'none';",
+    "xFrameOptions": "",
+    "xContentTypeOptions": "nosniff",
+    "xRobotsTag": "none",
+    "referrerPolicy": "no-referrer",
+    "strictTransportSecurity": "max-age=31536000; includeSubDomains"
+  },
   "clients": [{
     "clientId": "mvc-app",
     "name": ".NET MVC sample",
