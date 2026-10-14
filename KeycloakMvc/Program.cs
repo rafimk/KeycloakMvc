@@ -4,6 +4,9 @@ using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllersWithViews();
+// Framing is controlled by the CSP frame-ancestors header below instead.
+builder.Services.AddAntiforgery(options => options.SuppressXFrameOptionsHeader = true);
+var frameAncestors = string.Join(' ', builder.Configuration.GetSection("FrameAncestors").Get<string[]>() ?? []);
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
@@ -42,6 +45,11 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
     app.UseHttpsRedirection();
 }
+app.Use((context, next) =>
+{
+    context.Response.Headers.ContentSecurityPolicy = $"frame-ancestors 'self' {frameAncestors}".TrimEnd();
+    return next(context);
+});
 app.UseRouting();
 app.UseAuthentication();
 app.UseAuthorization();
