@@ -1,26 +1,65 @@
 @model HomeViewModel
-@{ ViewData["Title"] = "Keycloak MVC sample"; }
-<div class="text-center py-5">
-    <h1 class="display-4">Welcome, @(Model.DisplayName ?? Model.UserName)</h1>
-    <p class="lead">A .NET 10 MVC application with Keycloak and Active Directory sign-in.</p>
-    <dl class="row justify-content-center text-start mx-auto my-4 home-details">
-        <dt class="col-5">Username</dt>
-        <dd class="col-7">@Model.UserName</dd>
-        <dt class="col-5">Authentication</dt>
-        <dd class="col-7">@Model.AuthenticationMethod</dd>
+@{
+    ViewData["Title"] = "Home";
+}
+<div class="page-header">
+    <h1 class="page-title">Welcome back, @(Model.DisplayName ?? Model.UserName)!</h1>
+    <p class="page-subtitle">You are securely signed in to your account.</p>
+</div>
+
+<section class="status-card" aria-labelledby="status-title">
+    <span class="status-card__icon status-card__icon--success"><icon name="circle-check" /></span>
+    <div>
+        <h2 class="status-card__title" id="status-title">Authentication successful</h2>
+        <p class="status-card__text">Your identity has been verified successfully.</p>
+    </div>
+</section>
+
+<section class="dash-card" aria-labelledby="account-title">
+    <header class="dash-card__header">
+        <h2 class="dash-card__title" id="account-title">Account Information</h2>
+    </header>
+    <dl class="info-list">
+        <div class="info-row">
+            <dt class="info-row__label"><icon name="id-card" />Full Name</dt>
+            <dd class="info-row__value">@(Model.DisplayName ?? "Not provided")</dd>
+        </div>
+        <div class="info-row">
+            <dt class="info-row__label"><icon name="user-round" />Username</dt>
+            <dd class="info-row__value">@Model.UserName</dd>
+        </div>
+        <div class="info-row">
+            <dt class="info-row__label"><icon name="shield-check" />Authentication Method</dt>
+            <dd class="info-row__value"><span class="badge-soft">@Model.AuthenticationMethod</span></dd>
+        </div>
         @if (Model.IsActiveDirectory)
         {
-            <dt class="col-5">Domain</dt>
-            <dd class="col-7">@Model.Domain</dd>
+            <div class="info-row">
+                <dt class="info-row__label"><icon name="building" />Domain</dt>
+                <dd class="info-row__value">@Model.Domain</dd>
+            </div>
         }
         else
         {
-            <dt class="col-5">Identity provider</dt>
-            <dd class="col-7">Keycloak <span class="d-block small text-muted text-break">@Model.Domain</span></dd>
+            <div class="info-row">
+                <dt class="info-row__label"><icon name="server" />Identity Provider</dt>
+                <dd class="info-row__value">
+                    Keycloak
+                    <span class="info-row__hint">@Model.Domain</span>
+                </dd>
+            </div>
         }
     </dl>
-    <a class="btn btn-primary" asp-controller="Account" asp-action="Profile">View your profile</a>
-    <form class="mt-3" asp-controller="Account" asp-action="Logout" method="post">
-        <button class="btn btn-outline-secondary" type="submit">Logout</button>
-    </form>
-</div>
+    <footer class="dash-card__actions">
+        <a class="btn-app btn-app--primary" asp-controller="Account" asp-action="Profile">
+            <icon name="user" />
+            View Profile
+        </a>
+        <form asp-controller="Account" asp-action="Logout" method="post">
+            <button class="btn-app btn-app--outline" type="submit">
+                <icon name="log-out" />
+                Logout
+            </button>
+        </form>
+    </footer>
+</section>
