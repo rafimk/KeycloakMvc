@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using KeycloakMvc.Authentication;
 using KeycloakMvc.Authentication.ActiveDirectory;
+using KeycloakMvc.Authentication.PermittedUsers;
 using KeycloakMvc.Models;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -14,7 +15,9 @@ using Microsoft.Extensions.Options;
 namespace KeycloakMvc.Controllers;
 public class AccountController(
     IActiveDirectoryService activeDirectory,
-    IOptions<ActiveDirectoryOptions> activeDirectoryOptions) : Controller
+    IPermittedUserService permittedUsers,
+    IOptions<ActiveDirectoryOptions> activeDirectoryOptions,
+    ILogger<AccountController> logger) : Controller
 {
     private const string InvalidCredentialsMessage = "The username, password or domain is incorrect.";
     private const string UnavailableMessage = "Sign-in is temporarily unavailable. Try again later.";
@@ -31,7 +34,8 @@ public class AccountController(
         });
     }
 
-    // Starts the existing Keycloak OIDC flow. Keycloak's browser flow decides whether Kerberos is used.
+    // Starts the existing Keycloak OIDC flow. Keycloak's browser flow decides whether Kerberos is used,
+    // and KeycloakOpenIdConnectEvents enforces the permitted users list.
     [AllowAnonymous, HttpPost, ValidateAntiForgeryToken]
     public IActionResult LoginWithLoggedUser(string? returnUrl = null) => Challenge(
         new AuthenticationProperties { RedirectUri = SafeReturnUrl(returnUrl) },
@@ -50,7 +54,8 @@ public class AccountController(
         return LoginView(model);
     }
 
-    [AllowAnonymous, HttpPost, ValidateAntiForgeryToken, EnableRateLimiting("login")]
+    [AllowAnonymous, HttpPost, ValidateAntiForgeryToken]
+    [EnableRateLimiting(AuthenticationConstants.PasswordLoginRateLimitPolicy)]
     public async Task<IActionResult> Login(LoginViewModel model, CancellationToken cancellationToken)
     {
         model.ReturnUrl = SafeReturnUrl(model.ReturnUrl);
@@ -68,12 +73,24 @@ public class AccountController(
             return LoginView(model);
         }
 
-        await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, CreatePrincipal(result.User!));
+        var principal = AppPrincipalFactory.CreateActiveDirectoryPrincipal(result.User!);
+        if (!permittedUsers.IsPermitted(principal))
+        {
+            logger.LogWarning("Active Directory user {UserName} in {Domain} signed in but is not a permitted user",
+                result.User!.UserName, result.User.Domain);
+            return RedirectToAction(nameof(NotAuthorized));
+        }
+
+        await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal);
         return LocalRedirect(model.ReturnUrl);
     }
 
     [AllowAnonymous, HttpGet]
     public IActionResult LoginFailed() => View();
+
+    // Shown when sign-in succeeded but the user is not on the permitted users list. No session exists.
+    [AllowAnonymous, HttpGet]
+    public IActionResult NotAuthorized() => View();
 
     [AllowAnonymous, HttpGet]
     public IActionResult AccessDenied() => View();
@@ -106,21 +123,5 @@ public class AccountController(
             .Select(d => new SelectListItem($"{d.Name} ({d.Domain})", d.Domain))
             .ToList();
         return View(nameof(Login), model);
-    }
-
-    private static ClaimsPrincipal CreatePrincipal(ActiveDirectoryUser user)
-    {
-        List<Claim> claims =
-        [
-            new(AppClaimTypes.UserId, $"ad|{user.Domain}|{user.ObjectGuid}"),
-            new(AppClaimTypes.UserName, user.UserName),
-            new(AppClaimTypes.AuthenticationMethod, AppAuthenticationMethods.ActiveDirectory),
-            new(AppClaimTypes.AuthenticationDomain, user.Domain),
-        ];
-        if (!string.IsNullOrWhiteSpace(user.DisplayName))
-            claims.Add(new(AppClaimTypes.DisplayName, user.DisplayName));
-        claims.AddRange(user.Roles.Select(role => new Claim(AppClaimTypes.Role, role)));
-        return new ClaimsPrincipal(new ClaimsIdentity(
-            claims, AppAuthenticationMethods.ActiveDirectory, AppClaimTypes.UserName, AppClaimTypes.Role));
     }
 }

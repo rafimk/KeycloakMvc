@@ -9,8 +9,7 @@ namespace KeycloakMvc.Authentication.ActiveDirectory;
 /// <summary>
 /// Verifies a password with an LDAPS simple bind against the configured domain controller, then
 /// reads the user's own directory entry with that connection. No service account is needed and
-/// nothing is cached. The server certificate is validated by the operating system (Schannel on
-/// Windows, libldap/OpenSSL on Linux); this class never overrides that validation.
+/// nothing is cached.
 /// </summary>
 public sealed partial class ActiveDirectoryService(
     IOptions<ActiveDirectoryOptions> options,
@@ -49,7 +48,7 @@ public sealed partial class ActiveDirectoryService(
         cancellationToken.ThrowIfCancellationRequested();
         try
         {
-            using var connection = CreateConnection(settings);
+            using var connection = ActiveDirectoryConnectionFactory.Create(settings, AuthType.Basic);
             try
             {
                 // System.DirectoryServices.Protocols has no asynchronous bind. This call blocks
@@ -157,20 +156,6 @@ public sealed partial class ActiveDirectoryService(
         return true;
     }
 
-    private static LdapConnection CreateConnection(ActiveDirectoryDomainOptions settings)
-    {
-        var connection = new LdapConnection(
-            new LdapDirectoryIdentifier(settings.Server, settings.Port, fullyQualifiedDnsHostName: true, connectionless: false))
-        {
-            AuthType = AuthType.Basic,
-            Timeout = TimeSpan.FromSeconds(settings.TimeoutSeconds),
-        };
-        connection.SessionOptions.ProtocolVersion = 3;
-        connection.SessionOptions.SecureSocketLayer = settings.UseSsl;
-        connection.SessionOptions.ReferralChasing = ReferralChasingOptions.None;
-        return connection;
-    }
-
     private static async Task<SearchResultEntry?> FindUserAsync(
         LdapConnection connection, ActiveDirectoryDomainOptions settings, string accountName, CancellationToken cancellationToken)
     {
@@ -182,10 +167,7 @@ public sealed partial class ActiveDirectoryService(
         {
             SizeLimit = 2,
         };
-        var response = (SearchResponse)await Task.Factory.FromAsync(
-            (callback, state) => connection.BeginSendRequest(request, PartialResultProcessing.NoPartialResultSupport, callback, state),
-            connection.EndSendRequest,
-            state: null).WaitAsync(cancellationToken);
+        var response = await ActiveDirectoryConnectionFactory.SearchAsync(connection, request, cancellationToken);
         return response.Entries.Count == 1 ? response.Entries[0] : null;
     }
 
