@@ -1,18 +1,26 @@
+@model HomeViewModel
 @{ ViewData["Title"] = "Keycloak MVC sample"; }
 <div class="text-center py-5">
-    <h1 class="display-4">MVC + Keycloak</h1>
-    <p class="lead">A .NET 10 MVC application with OpenID Connect authentication.</p>
-    @if (User.Identity?.IsAuthenticated == true)
-    {
-        <p>Welcome, @User.Identity.Name!</p>
-        <a class="btn btn-primary" asp-controller="Account" asp-action="Profile">View your profile</a>
-        <form class="mt-3" asp-controller="Account" asp-action="Logout" method="post">
-            <button class="btn btn-outline-secondary" type="submit">Sign out</button>
-        </form>
-    }
-    else
-    {
-        <a class="btn btn-primary" asp-controller="Account" asp-action="Login">Sign in with Keycloak</a>
-        <p class="mt-3 text-muted">Demo account: demo / Demo123!</p>
-    }
+    <h1 class="display-4">Welcome, @(Model.DisplayName ?? Model.UserName)</h1>
+    <p class="lead">A .NET 10 MVC application with Keycloak and Active Directory sign-in.</p>
+    <dl class="row justify-content-center text-start mx-auto my-4 home-details">
+        <dt class="col-5">Username</dt>
+        <dd class="col-7">@Model.UserName</dd>
+        <dt class="col-5">Authentication</dt>
+        <dd class="col-7">@Model.AuthenticationMethod</dd>
+        @if (Model.IsActiveDirectory)
+        {
+            <dt class="col-5">Domain</dt>
+            <dd class="col-7">@Model.Domain</dd>
+        }
+        else
+        {
+            <dt class="col-5">Identity provider</dt>
+            <dd class="col-7">Keycloak <span class="d-block small text-muted text-break">@Model.Domain</span></dd>
+        }
+    </dl>
+    <a class="btn btn-primary" asp-controller="Account" asp-action="Profile">View your profile</a>
+    <form class="mt-3" asp-controller="Account" asp-action="Logout" method="post">
+        <button class="btn btn-outline-secondary" type="submit">Logout</button>
+    </form>
 </div>

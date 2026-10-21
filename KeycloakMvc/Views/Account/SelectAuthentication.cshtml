@@ -1,0 +1,43 @@
+@model SelectAuthenticationViewModel
+@{ ViewData["Title"] = "Sign in"; }
+<div class="auth-wrapper">
+    <div class="card auth-card shadow-sm">
+        <div class="card-body p-4 p-sm-5">
+            <h1 class="h3 mb-2 text-center">Welcome</h1>
+            <p class="text-muted text-center mb-4">Choose how you would like to sign in.</p>
+
+            <form asp-controller="Account" asp-action="LoginWithLoggedUser" method="post">
+                <input type="hidden" name="returnUrl" value="@Model.ReturnUrl" />
+                <button type="submit" class="btn btn-primary w-100 auth-option">
+                    <svg class="auth-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="4" width="20" height="13" rx="2" />
+                        <path d="M8 21h8M12 17v4" />
+                        <circle cx="12" cy="9" r="2.2" />
+                        <path d="M8.5 14a3.5 3.5 0 0 1 7 0" />
+                    </svg>
+                    <span>Login with Logged-in User</span>
+                </button>
+            </form>
+            <p class="small text-muted mt-2 mb-4">Single sign-on with your Windows account through Keycloak.</p>
+
+            @if (Model.PasswordLoginEnabled)
+            {
+                <a class="btn btn-outline-primary w-100 auth-option" asp-controller="Account" asp-action="Login" asp-route-returnUrl="@Model.ReturnUrl">
+                    <svg class="auth-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="8" cy="15" r="4" />
+                        <path d="M10.85 12.15 19 4M15.5 7.5l2.5 2.5M17.5 5.5l2 2" />
+                    </svg>
+                    <span>Login with Username and Password</span>
+                </a>
+                <p class="small text-muted mt-2 mb-0">Sign in with your Active Directory account and domain.</p>
+            }
+            else
+            {
+                <button type="button" class="btn btn-outline-secondary w-100 auth-option" disabled>
+                    <span>Login with Username and Password</span>
+                </button>
+                <p class="small text-muted mt-2 mb-0">No Active Directory domains are configured.</p>
+            }
+        </div>
+    </div>
+</div>
