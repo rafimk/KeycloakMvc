@@ -8,15 +8,18 @@ Install Docker Desktop with Linux containers, then run from this folder:
 docker compose up -d --build
 ```
 
-Open http://localhost:5000. Visitors are automatically redirected to the Keycloak login page. After signing in, the application home page opens. Signing out returns to the login page.
+Open http://localhost:5000. Visitors see a sign-in page with two choices: **Login with Logged-in User** (Keycloak single sign-on) and **Login with Username and Password** (Active Directory). After signing in, the application home page opens, or the page originally requested. Signing out returns to the sign-in page. See [Hybrid authentication](#hybrid-authentication).
 
 - Demo username: `demo`
 - Demo password: `Demo123!`
+- Username and password login (local AD test domain **Lab**): `alice` / `Alice!Lab2026` (see [Local test domain](#active-directory-login-with-username-and-password))
 - Keycloak admin console: http://localhost:8080/admin
 - Admin username: `admin`
 - Admin password: `admin-local-password`
 
-The protected `/Account/Profile` page displays identity claims. Sign out ends both the MVC cookie session and the Keycloak session. Logout uses a POST with antiforgery validation.
+The protected `/Account/Profile` page displays identity claims. For Keycloak sign-ins, sign out ends both the MVC cookie session and the Keycloak session. For Active Directory sign-ins, it ends only the MVC session. Logout uses a POST with antiforgery validation.
+
+`python scripts/smoke_test.py` checks the running sample end to end.
 
 ## Run MVC locally
 
@@ -28,6 +31,8 @@ dotnet run --project KeycloakMvc --no-launch-profile --urls http://localhost:500
 ```
 
 Set `ASPNETCORE_ENVIRONMENT=Development` before running locally (PowerShell: `$env:ASPNETCORE_ENVIRONMENT="Development"`).
+
+When the app runs this way, outside Docker, the lab AD domain is not configured. The login page shows only the sample domains from `appsettings.json`, and they do not exist. To test the username and password login, run the full Docker setup.
 
 ## Configuration
 
@@ -41,6 +46,135 @@ Realm imports skip an existing realm. To apply JSON changes to an existing setup
 docker compose logs -f
 docker compose down
 ```
+
+## Hybrid authentication
+
+```text
+Anonymous request ──► /Account/SelectAuthentication?ReturnUrl=...
+                         │                               │
+     Login with Logged-in User (POST)        Login with Username and Password
+                         │                               │
+     Keycloak OIDC (code + PKCE)              /Account/Login (username, password, domain)
+     Keycloak browser flow: Kerberos/SPNEGO   LDAPS bind to the selected AD domain
+                         │                               │
+                         └──────► MVC cookie session ◄───┘ ──► return URL or Home
+```
+
+- The cookie scheme is the default challenge, so `[Authorize]` and the global fallback policy send anonymous users to the selection page. Nothing redirects to Keycloak automatically.
+- The two methods never fall back to each other. A failed Keycloak sign-in shows `/Account/LoginFailed`.
+- Return URLs are used only when `Url.IsLocalUrl` accepts them. Anything else goes to `/`.
+- Password attempts are limited to 5 per minute per client IP (`Program.cs`, policy `login`). Behind a reverse proxy, configure `ForwardedHeaders` so the limiter sees client addresses. Per-account lockout is left to Active Directory.
+
+### Session claims
+
+Both methods produce the same claim types (`KeycloakMvc/Authentication/AppClaimTypes.cs`):
+
+| Claim | Keycloak | Active Directory |
+|---|---|---|
+| `preferred_username` | from the ID token | `sAMAccountName` |
+| `name` | from the ID token | `displayName` |
+| `app_user_id` | `keycloak\|<issuer>\|<sub>` | `ad\|<domain>\|<objectGUID>` |
+| `app_auth_method` | `KeycloakKerberos` or `KeycloakSso` | `ActiveDirectory` |
+| `app_auth_domain` | issuer URL | AD DNS domain |
+| `role` | only if Keycloak sends a `role` claim | only from `RoleMappings` |
+
+Use `app_user_id` as the stable user key. It includes the provider and domain, so a Keycloak user and an AD user never share an identity, and neither do `jsmith` in two domains. Linking them would need an explicit mapping policy, which this sample does not include. Signing in to AD grants no roles by itself.
+
+### Keycloak Kerberos (Login with Logged-in User)
+
+The app only starts the existing OIDC flow and validates Keycloak's tokens. Keycloak handles Kerberos, but only when its browser flow is configured for it:
+
+1. Create a service principal `HTTP/<keycloak host>@REALM` and a keytab for it in AD (or your KDC).
+2. In the realm, add **User federation → Kerberos** (or LDAP with Kerberos authentication enabled) with that principal and keytab.
+3. In **Authentication**, set the **Kerberos** execution of the browser flow to *Alternative* (or *Required*). Alternatively, bind a copy of the flow to the `mvc-app` client under **Advanced → Authentication flow overrides**.
+4. Configure browsers to send tickets to the Keycloak host. For example, add it to the Local intranet zone in Windows, or set the `AuthServerAllowlist` policy in Chrome and Edge.
+
+#### Silent sign-in
+
+With Kerberos configured, the user never sees the Keycloak login page:
+
+```text
+Sign-in page ── click "Login with Logged-in User" ──► Keycloak (/auth?...&code_challenge=...)
+                                                         │  401 WWW-Authenticate: Negotiate
+                                                         ▼
+                              Browser sends the Windows Kerberos ticket automatically
+                                                         │  Keycloak validates the ticket
+                                                         ▼
+                            /signin-oidc?code=... ──► MVC validates the tokens ──► return URL or Home
+```
+
+To the user it is one click and a short redirect. While the Keycloak SSO session is active, later sign-ins skip the Kerberos exchange too. The app needs no change for this. It is all Keycloak and browser configuration.
+
+The flow is only silent when all of these are true:
+
+- **Domain sign-in:** the computer is joined to the domain and the user signed in to Windows with a domain account. Windows Home editions cannot join a domain.
+- **Browser trust:** the browser trusts the Keycloak host for Negotiate authentication (step 4 above). For Firefox, set `network.negotiate-auth.trusted-uris`.
+- **Host name:** the browser reaches Keycloak by the host name in the service principal, such as `https://sso.corp.example.com` for `HTTP/sso.corp.example.com@CORP.EXAMPLE.COM`. Kerberos does not work with `localhost` or an IP address, so this sample's `http://localhost:8080` setup cannot demonstrate it.
+
+When Kerberos fails, for example because there is no ticket or the browser does not trust the host, Keycloak decides what happens next:
+
+- **Kerberos set to *Alternative*:** Keycloak shows its username and password form.
+- **Kerberos is the only option:** Keycloak shows an error.
+
+The app never falls back to Active Directory on its own. The user can return to the selection page and choose **Login with Username and Password**. The same exchange works inside the iframe, with the cookie limits described in [Embedding in an iframe](#embedding-in-an-iframe).
+
+#### Showing the sign-in method
+
+Without Kerberos configured, Keycloak shows its normal login form and the app reports **Keycloak SSO**. By default the ID token does not say how the user authenticated. The app therefore reports **Keycloak Kerberos SSO** only when the `amr` claim contains the value in `Keycloak:KerberosAmrValue`. This requires a Keycloak version that supports authentication method references:
+
+1. Set a reference value, for example `kerberos`, on the Kerberos execution.
+2. Add the **Authentication Method Reference (AMR)** mapper to the client with **Add to ID token** turned on.
+3. Set `Keycloak__KerberosAmrValue=kerberos`.
+
+### Active Directory (Login with Username and Password)
+
+Domains are configured under `ActiveDirectory:Domains` in `KeycloakMvc/appsettings.json`. The values there are examples and do not resolve:
+
+| Setting | Meaning |
+|---|---|
+| `Name` | Label in the domain list |
+| `Domain` | DNS domain, for example `corp.example.com` |
+| `NetBiosName` | Optional, so users can type `CORP\jsmith` |
+| `Server` | DC host name; must match the LDAPS certificate |
+| `Port` / `UseSsl` | `636` / `true`. Startup fails if `UseSsl` is `false` |
+| `SearchBase` | Optional; defaults to the domain root |
+| `TimeoutSeconds` | 1–60, default 10 |
+| `RoleMappings` | `[{ "Group": "CN=App Admins,OU=Groups,DC=corp,DC=example,DC=com", "Role": "Admin" }]`, matched against the user's direct `memberOf` entries |
+
+Startup fails on invalid or duplicate settings. An empty `Domains` list disables the password option.
+
+`ActiveDirectoryService` uses `System.DirectoryServices.Protocols`. It works as follows:
+
+- **Bind.** It performs an LDAPS simple bind as `user@domain` against the server configured for the selected domain. Users cannot supply a server, and the app never tries another domain.
+- **Usernames.** It accepts `jsmith`, `jsmith@corp.example.com` and `CORP\jsmith`, but only when the domain part matches the selected domain.
+- **Account check.** Over the same connection, it reads the user's `objectGUID`, `displayName`, `userAccountControl` and `memberOf`, and rejects disabled accounts. No service account is needed.
+- **Empty passwords** are rejected, because an LDAP bind with an empty password is an anonymous bind.
+- **Passwords** are never logged, stored, or put into claims.
+- **Errors.** Users see only "The username, password or domain is incorrect" or "Sign-in is temporarily unavailable". AD's reason code (`52e`, `533`, `775`, and so on) is written to the log.
+- **Async.** The bind is synchronous because the library has no asynchronous bind. The user lookup is asynchronous.
+
+**Certificate trust.** The LDAPS certificate is always validated; validation is never disabled. On Windows, the issuing CA must be in the machine's trusted root store. In the Linux container, `libldap` uses the system CA bundle, so add your CA to the image:
+
+```dockerfile
+COPY corp-root-ca.crt /usr/local/share/ca-certificates/
+RUN update-ca-certificates
+```
+
+The Dockerfile installs `libldap2`, which `System.DirectoryServices.Protocols` needs on Linux.
+
+**Local test domain.** `docker compose up` also starts `samba`, a Samba 4 AD domain controller built from `samba/`. It provisions the domain `lab.test` (NetBIOS `LAB`, DC `dc1.lab.test`) and its own CA for LDAPS. The `mvc` service replaces the first sample domain with it through `ActiveDirectory__Domains__0__*` environment variables, and trusts the lab CA through `LDAPTLS_CACERT`. Select **Lab (lab.test)** on the login page:
+
+| Username | Password | Result |
+|---|---|---|
+| `alice` | `Alice!Lab2026` | Signs in. Member of `App Admins`, mapped to the `Admin` role |
+| `bob` | `Bob!Lab2026` | Signs in with no roles |
+| `carol` | `Carol!Lab2026` | Rejected: account disabled |
+
+Three wrong passwords lock an account for 5 minutes. `LAB\alice` and `alice@lab.test` also work. **Operations (ops.example.com)** stays unreachable, to show the "temporarily unavailable" message. The domain administrator is `Administrator` / `Admin!Lab2026`. The domain is provisioned again whenever the container is recreated, which resets users and lockouts.
+
+The lab container needs the `SYS_ADMIN` capability because Samba stores sysvol ACLs in extended attributes. It is a test fixture only; don't run it in production.
+
+**Using your real Active Directory.** Remove the `ActiveDirectory__*` and `LDAPTLS_CACERT` variables and the `samba` service from `compose.yaml`. Then set your domains in `appsettings.json` and trust your CA as described above. An MIT Kerberos KDC or a plain OpenLDAP server can't stand in for AD. Neither provides AD's `user@domain` bind, `sAMAccountName`, `objectGUID` or `userAccountControl`.
 
 ## Embedding in an iframe
 
@@ -141,7 +275,7 @@ In the MVC app, point `Keycloak:Authority` (and `Keycloak:MetadataAddress`, if s
 
 ## Development only
 
-This sample uses HTTP, Keycloak development mode, its local development database, and committed demo credentials. For production, use HTTPS, secure cookie defaults, an external supported database, secret management, production Keycloak startup and persistent protected data-protection keys. Enable `Keycloak__RequireHttpsMetadata=true` and supply the production authority and secret.
+This sample uses HTTP, Keycloak development mode, its local development database, a Samba lab domain controller, and committed demo credentials. For production, use HTTPS, secure cookie defaults, an external supported database, secret management, production Keycloak startup and persistent protected data-protection keys. Enable `Keycloak__RequireHttpsMetadata=true` and supply the production authority and secret.
 
 ## References
 
@@ -151,5 +285,12 @@ This sample uses HTTP, Keycloak development mode, its local development database
 
 ## Verification
 
-Build: `dotnet build KeycloakMvc`. With Docker services running and Python 3 available, run `python scripts/smoke_test.py` to verify the full login/logout flow.
+Build: `dotnet build KeycloakMvc`. With the Docker services running and Python 3 available, run `python scripts/smoke_test.py`. It checks:
+
+- Anonymous users see the selection page and keep their return URL.
+- The login form validates input and rejects missing antiforgery tokens.
+- Active Directory sign-in against `lab.test`: success, wrong password, disabled account, wrong domain prefix, role mapping, and local-only logout.
+- Keycloak login with PKCE, claims, open-redirect protection, Keycloak logout, and login rate limiting.
+
+Kerberos SSO is not covered, because it needs a domain-joined client and a Keycloak host with a matching service principal.
 

@@ -18,6 +18,8 @@
                         aria-expanded="false" aria-label="Toggle navigation">
                     <span class="navbar-toggler-icon"></span>
                 </button>
+                @if (User.Identity?.IsAuthenticated == true)
+                {
                 <div class="navbar-collapse collapse d-sm-inline-flex justify-content-between">
                     <ul class="navbar-nav flex-grow-1">
                         <li class="nav-item">
@@ -28,6 +30,7 @@
                         </li>
                     </ul>
                 </div>
+                }
             </div>
         </nav>
     </header>
@@ -39,7 +42,11 @@
 
     <footer class="border-top footer text-muted">
         <div class="container">
-            &copy; 2026 - KeycloakMvc - <a asp-area="" asp-controller="Home" asp-action="Privacy">Privacy</a>
+            &copy; 2026 - KeycloakMvc
+            @if (User.Identity?.IsAuthenticated == true)
+            {
+                <text>- <a asp-area="" asp-controller="Home" asp-action="Privacy">Privacy</a></text>
+            }
         </div>
     </footer>
     <script src="~/lib/jquery/dist/jquery.min.js"></script>
