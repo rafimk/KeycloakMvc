@@ -1,10 +1,13 @@
-@{ ViewData["Title"] = "Not authorized"; }
-<div class="auth-wrapper">
-    <div class="card auth-card shadow-sm">
-        <div class="card-body p-4 p-sm-5 text-center">
-            <h1 class="h4">Not authorized</h1>
-            <p class="text-muted">Your account was verified, but it is not permitted to use this application. Contact your administrator if you need access.</p>
-            <a class="btn btn-primary" asp-controller="Account" asp-action="SelectAuthentication">Back to sign-in options</a>
-        </div>
-    </div>
+@{
+    Layout = "_AuthLayout";
+    ViewData["Title"] = "Not authorized";
+}
+<div class="auth-header">
+    <span class="auth-logo auth-logo--danger"><icon name="shield-x" /></span>
+    <h1 class="auth-title">Not authorized</h1>
+    <p class="auth-subtitle">Your account was verified, but it is not permitted to use this application. Contact your administrator if you need access.</p>
 </div>
+<a class="btn-app btn-app--primary btn-app--block" asp-controller="Account" asp-action="SelectAuthentication">
+    <icon name="arrow-left" />
+    Back to sign-in options
+</a>

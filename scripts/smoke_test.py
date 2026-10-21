@@ -107,7 +107,7 @@ assert logout.url == SELECT, f"AD logout went to {logout.url}"
 assert get(f"{APP}/").url.startswith(SELECT), "AD session survived logout"
 url, body = ad_login({"UserName": "bob", "Password": "Bob!Lab2026", "Domain": "lab.test"})
 assert url == f"{APP}/", url
-assert re.search(r"Welcome, Bob Brown", body) and "Admin" not in body
+assert re.search(r"Welcome back, Bob Brown!", body) and "Admin" not in body
 token = antiforgery(body)
 post(f"{APP}/Account/Logout", {"__RequestVerificationToken": token})
 

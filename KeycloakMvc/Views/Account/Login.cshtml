@@ -1,41 +1,64 @@
 @model LoginViewModel
-@{ ViewData["Title"] = "Sign in with username and password"; }
-<div class="auth-wrapper">
-    <div class="card auth-card shadow-sm">
-        <div class="card-body p-4 p-sm-5">
-            <h1 class="h4 mb-1">Sign in</h1>
-            <p class="text-muted mb-4">Use your Active Directory account.</p>
-
-            <form asp-controller="Account" asp-action="Login" method="post">
-                <div asp-validation-summary="ModelOnly" class="alert alert-danger py-2" role="alert"></div>
-                <input type="hidden" asp-for="ReturnUrl" />
-
-                <div class="mb-3">
-                    <label asp-for="UserName" class="form-label"></label>
-                    <input asp-for="UserName" class="form-control" autocomplete="username" autocapitalize="none" spellcheck="false" autofocus />
-                    <span asp-validation-for="UserName" class="text-danger small"></span>
-                </div>
-                <div class="mb-3">
-                    <label asp-for="Password" class="form-label"></label>
-                    <input asp-for="Password" class="form-control" autocomplete="current-password" />
-                    <span asp-validation-for="Password" class="text-danger small"></span>
-                </div>
-                <div class="mb-4">
-                    <label asp-for="Domain" class="form-label"></label>
-                    <select asp-for="Domain" asp-items="Model.Domains" class="form-select">
-                        <option value="">Select a domain</option>
-                    </select>
-                    <span asp-validation-for="Domain" class="text-danger small"></span>
-                </div>
-
-                <div class="d-flex gap-2">
-                    <button type="submit" class="btn btn-primary flex-grow-1">Login</button>
-                    <a class="btn btn-outline-secondary flex-grow-1" asp-controller="Account" asp-action="SelectAuthentication" asp-route-returnUrl="@Model.ReturnUrl">Cancel</a>
-                </div>
-            </form>
-        </div>
-    </div>
+@{
+    Layout = "_AuthLayout";
+    ViewData["Title"] = "Sign in with username and password";
+}
+<div class="auth-header">
+    <span class="auth-logo"><icon name="shield-check" /></span>
+    <h1 class="auth-title">Sign in to your account</h1>
+    <p class="auth-subtitle">Enter your Active Directory credentials to continue.</p>
 </div>
+
+<form asp-controller="Account" asp-action="Login" method="post" class="auth-form" data-loading-form novalidate>
+    <div asp-validation-summary="ModelOnly" class="auth-alert" role="alert"></div>
+    <input type="hidden" asp-for="ReturnUrl" />
+
+    <div class="field">
+        <label asp-for="UserName" class="field__label"></label>
+        <div class="field__control">
+            <icon name="user" />
+            <input asp-for="UserName" class="field__input" placeholder="Enter your username"
+                   autocomplete="username" autocapitalize="none" spellcheck="false" autofocus
+                   aria-describedby="UserName-error" />
+        </div>
+        <span asp-validation-for="UserName" id="UserName-error" class="field__error" aria-live="polite"></span>
+    </div>
+
+    <div class="field">
+        <label asp-for="Password" class="field__label"></label>
+        <div class="field__control">
+            <icon name="lock" />
+            <input asp-for="Password" class="field__input field__input--with-action" placeholder="Enter your password"
+                   autocomplete="current-password" aria-describedby="Password-error" />
+            <button type="button" class="field__action" data-password-toggle="Password"
+                    aria-label="Show password" aria-pressed="false" aria-controls="Password">
+                <icon name="eye" />
+            </button>
+        </div>
+        <span asp-validation-for="Password" id="Password-error" class="field__error" aria-live="polite"></span>
+    </div>
+
+    <div class="field">
+        <label asp-for="Domain" class="field__label"></label>
+        <div class="field__control">
+            <icon name="building" />
+            <select asp-for="Domain" asp-items="Model.Domains" class="field__input field__select" aria-describedby="Domain-error">
+                <option value="">Select your domain</option>
+            </select>
+        </div>
+        <span asp-validation-for="Domain" id="Domain-error" class="field__error" aria-live="polite"></span>
+    </div>
+
+    <button type="submit" class="btn-app btn-app--primary btn-app--block" data-loading-text="Signing in…">
+        <span class="spinner" aria-hidden="true"></span>
+        <span class="btn-app__label">Sign in</span>
+    </button>
+
+    <a class="btn-text" asp-controller="Account" asp-action="SelectAuthentication" asp-route-returnUrl="@Model.ReturnUrl">
+        <icon name="arrow-left" />
+        Back to sign-in options
+    </a>
+</form>
 
 @section Scripts {
     <partial name="_ValidationScriptsPartial" />

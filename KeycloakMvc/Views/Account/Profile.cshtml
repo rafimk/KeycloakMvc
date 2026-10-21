@@ -1,15 +1,33 @@
 @{ ViewData["Title"] = "Your profile"; }
-<h1>Your profile</h1>
-<p>Signed in as <strong>@User.Identity?.Name</strong>. This page requires authentication.</p>
-<table class="table table-striped">
-    <thead><tr><th>Claim</th><th>Value</th></tr></thead>
-    <tbody>
-    @foreach (var claim in User.Claims.OrderBy(c => c.Type))
-    {
-        <tr><td>@claim.Type</td><td class="text-break">@claim.Value</td></tr>
-    }
-    </tbody>
-</table>
-<form asp-controller="Account" asp-action="Logout" method="post">
-    <button class="btn btn-outline-secondary" type="submit">Sign out</button>
-</form>
+<div class="page-header">
+    <h1 class="page-title">Your profile</h1>
+    <p class="page-subtitle">Signed in as <strong>@User.Identity?.Name</strong>. These are the claims in your current session.</p>
+</div>
+<section class="dash-card" aria-labelledby="claims-title">
+    <header class="dash-card__header">
+        <h2 class="dash-card__title" id="claims-title">Session claims</h2>
+    </header>
+    <div class="table-responsive">
+        <table class="claims-table">
+            <thead><tr><th scope="col">Claim</th><th scope="col">Value</th></tr></thead>
+            <tbody>
+            @foreach (var claim in User.Claims.OrderBy(c => c.Type))
+            {
+                <tr><td>@claim.Type</td><td class="text-break">@claim.Value</td></tr>
+            }
+            </tbody>
+        </table>
+    </div>
+    <footer class="dash-card__actions">
+        <a class="btn-app btn-app--outline" asp-controller="Home" asp-action="Index">
+            <icon name="arrow-left" />
+            Back to home
+        </a>
+        <form asp-controller="Account" asp-action="Logout" method="post">
+            <button class="btn-app btn-app--outline" type="submit">
+                <icon name="log-out" />
+                Sign out
+            </button>
+        </form>
+    </footer>
+</section>

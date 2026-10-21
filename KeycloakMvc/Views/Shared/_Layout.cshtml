@@ -1,4 +1,19 @@
-﻿<!DOCTYPE html>
+﻿@using KeycloakMvc.Authentication
+@{
+    var isAuthPage = ViewData["AuthPage"] is true;
+    var showAppHeader = !isAuthPage && User.Identity?.IsAuthenticated == true;
+    var userName = User.Identity?.Name ?? string.Empty;
+    var displayName = User.FindFirst(AppClaimTypes.DisplayName)?.Value;
+    var nameParts = (string.IsNullOrWhiteSpace(displayName) ? userName : displayName)
+        .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+    var initials = nameParts.Length switch
+    {
+        0 => "?",
+        1 => nameParts[0][..1].ToUpperInvariant(),
+        _ => $"{nameParts[0][0]}{nameParts[^1][0]}".ToUpperInvariant(),
+    };
+}
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="utf-8" />
@@ -7,48 +22,52 @@
     <script type="importmap"></script>
     <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" />
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
-    <link rel="stylesheet" href="~/KeycloakMvc.styles.css" asp-append-version="true" />
 </head>
-<body>
-    <header>
-        <nav class="navbar navbar-expand-sm navbar-toggleable-sm navbar-light bg-white border-bottom box-shadow mb-3">
-            <div class="container-fluid">
-                <a class="navbar-brand" asp-area="" asp-controller="Home" asp-action="Index">KeycloakMvc</a>
-                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target=".navbar-collapse" aria-controls="navbarSupportedContent"
-                        aria-expanded="false" aria-label="Toggle navigation">
-                    <span class="navbar-toggler-icon"></span>
-                </button>
-                @if (User.Identity?.IsAuthenticated == true)
-                {
-                <div class="navbar-collapse collapse d-sm-inline-flex justify-content-between">
-                    <ul class="navbar-nav flex-grow-1">
-                        <li class="nav-item">
-                            <a class="nav-link text-dark" asp-area="" asp-controller="Home" asp-action="Index">Home</a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link text-dark" asp-area="" asp-controller="Home" asp-action="Privacy">Privacy</a>
-                        </li>
-                    </ul>
+<body class="@(isAuthPage ? "auth-body" : "app-body")">
+    <a class="skip-link" href="#main">Skip to main content</a>
+    @if (showAppHeader)
+    {
+        <header class="app-header">
+            <nav class="app-header__inner" aria-label="Main">
+                <a class="app-brand" asp-controller="Home" asp-action="Index">
+                    <span class="app-logo"><icon name="shield-check" /></span>
+                    <span class="app-brand__name">KeycloakMvc</span>
+                </a>
+                <div class="app-nav">
+                    <a class="app-nav__link" asp-controller="Home" asp-action="Index"
+                       aria-current="@(ViewContext.RouteData.Values["controller"] as string == "Home" ? "page" : null)">
+                        <icon name="house" />
+                        <span class="app-nav__label">Home</span>
+                    </a>
+                    <span class="app-user">
+                        <span class="avatar" aria-hidden="true">@initials</span>
+                        <span class="app-user__name"><span class="visually-hidden">Signed in as </span>@userName</span>
+                    </span>
+                    <form asp-controller="Account" asp-action="Logout" method="post">
+                        <button type="submit" class="app-nav__link app-nav__button">
+                            <icon name="log-out" />
+                            <span class="app-nav__label">Logout</span>
+                        </button>
+                    </form>
                 </div>
-                }
+            </nav>
+        </header>
+    }
+    @if (isAuthPage)
+    {
+        @RenderBody()
+    }
+    else
+    {
+        <main id="main" class="app-main" tabindex="-1">
+            <div class="app-container">
+                @RenderBody()
             </div>
-        </nav>
-    </header>
-    <div class="container">
-        <main role="main" class="pb-3">
-            @RenderBody()
         </main>
-    </div>
-
-    <footer class="border-top footer text-muted">
-        <div class="container">
-            &copy; 2026 - KeycloakMvc
-            @if (User.Identity?.IsAuthenticated == true)
-            {
-                <text>- <a asp-area="" asp-controller="Home" asp-action="Privacy">Privacy</a></text>
-            }
-        </div>
-    </footer>
+        <footer class="app-footer">
+            <div class="app-container">&copy; 2026 KeycloakMvc</div>
+        </footer>
+    }
     <script src="~/lib/jquery/dist/jquery.min.js"></script>
     <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
     <script src="~/js/site.js" asp-append-version="true"></script>
