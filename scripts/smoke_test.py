@@ -1,6 +1,7 @@
 """End-to-end local sample check. Run: python scripts/smoke_test.py"""
 import html
 import http.cookiejar
+import json
 import re
 import time
 import urllib.error
@@ -46,7 +47,21 @@ def ad_login(fields, return_url="/"):
             return url, body
         time.sleep(5)
 
-assert get(f"{APP}/health").status == 200
+def keycloak_password_login(username, password, return_url="/"):
+    page = keycloak_login(return_url).read().decode()
+    action = html.unescape(re.search(r'<form[^>]*action="([^"]+)"', page).group(1))
+    response = post(action, {"username": username, "password": password, "credentialId": ""})
+    return response.url, response.read().decode()
+
+# Health: liveness, and readiness with Keycloak and each AD domain.
+live = json.loads(get(f"{APP}/health").read())
+assert live["status"] == "Healthy", live
+ready = json.loads(get(f"{APP}/health/ready").read())
+checks = {check["name"]: check for check in ready["checks"]}
+assert checks["keycloak"]["status"] == "Healthy", ready
+assert checks["active-directory"]["data"]["lab.test"] == "reachable", ready
+assert checks["active-directory"]["data"]["ops.example.com"] == "unreachable", ready
+assert ready["status"] == "Degraded", ready
 
 # Anonymous users see the selection page, not Keycloak, and the requested URL is preserved.
 response = get(f"{APP}/Account/Profile")
@@ -96,12 +111,21 @@ assert re.search(r"Welcome, Bob Brown", body) and "Admin" not in body
 token = antiforgery(body)
 post(f"{APP}/Account/Logout", {"__RequestVerificationToken": token})
 
+# Valid AD credentials that are not on the permitted users list get no session.
+url, body = ad_login({"UserName": "dave", "Password": "Dave!Lab2026", "Domain": "lab.test"})
+assert url == f"{APP}/Account/NotAuthorized", f"Unpermitted AD user reached {url}"
+assert "Not authorized" in body and "Back to sign-in options" in body
+assert get(f"{APP}/").url.startswith(SELECT), "Unpermitted AD user got a session"
+
+# A Keycloak user who is not permitted gets no session, and their Keycloak session is ended.
+url, body = keycloak_password_login("guest", "Guest123!")
+assert url == f"{APP}/Account/NotAuthorized", f"Unpermitted Keycloak user reached {url}"
+assert get(f"{APP}/").url.startswith(SELECT), "Unpermitted Keycloak user got a session"
+assert 'name="password"' in keycloak_login("/").read().decode(), "Unpermitted user's Keycloak session survived"
+
 # Keycloak login through the existing OIDC + PKCE flow returns to the original URL.
-page = keycloak_login("/Account/Profile").read().decode()
-action = html.unescape(re.search(r'<form[^>]*action="([^"]+)"', page).group(1))
-profile = post(action, {"username": "demo", "password": "Demo123!", "credentialId": ""})
-assert profile.url == f"{APP}/Account/Profile", profile.url
-body = profile.read().decode()
+url, body = keycloak_password_login("demo", "Demo123!", "/Account/Profile")
+assert url == f"{APP}/Account/Profile", url
 assert "Signed in as <strong>demo</strong>" in body, "Login did not reach authenticated profile"
 assert "app_auth_method" in body and "KeycloakSso" in body, "Authentication method claim missing"
 home = get(f"{APP}/").read().decode()
@@ -129,5 +153,6 @@ for _ in range(11):
 else:
     raise AssertionError("Login attempts were not rate limited")
 
-print("PASS: selection page, return URL, AD form validation, AD sign-in/rejections/roles/logout, "
-      "PKCE Keycloak login, claims, open-redirect protection, Keycloak logout and login rate limiting")
+print("PASS: health checks, selection page, return URL, AD form validation, AD sign-in/rejections/roles/logout, "
+      "permitted users (AD and Keycloak), PKCE Keycloak login, claims, open-redirect protection, "
+      "Keycloak logout and login rate limiting")

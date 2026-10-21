@@ -9,7 +9,7 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0
 RUN apt-get update && apt-get install -y --no-install-recommends libldap2 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /app/publish .
-RUN mkdir -p /home/app/.aspnet/DataProtection-Keys && chown -R app:app /home/app/.aspnet
+RUN mkdir -p /home/app/.aspnet/DataProtection-Keys /app/logs && chown -R app:app /home/app/.aspnet /app/logs
 USER $APP_UID
 EXPOSE 8080
 ENTRYPOINT ["dotnet", "KeycloakMvc.dll"]

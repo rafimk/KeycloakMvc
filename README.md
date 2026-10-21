@@ -13,6 +13,8 @@ Open http://localhost:5000. Visitors see a sign-in page with two choices: **Logi
 - Demo username: `demo`
 - Demo password: `Demo123!`
 - Username and password login (local AD test domain **Lab**): `alice` / `Alice!Lab2026` (see [Local test domain](#active-directory-login-with-username-and-password))
+- Not permitted, to test **Not authorized**: `guest` / `Guest123!` (Keycloak), `dave` / `Dave!Lab2026` (AD)
+- Health: http://localhost:5000/health and http://localhost:5000/health/ready
 - Keycloak admin console: http://localhost:8080/admin
 - Admin username: `admin`
 - Admin password: `admin-local-password`
@@ -32,11 +34,22 @@ dotnet run --project KeycloakMvc --no-launch-profile --urls http://localhost:500
 
 Set `ASPNETCORE_ENVIRONMENT=Development` before running locally (PowerShell: `$env:ASPNETCORE_ENVIRONMENT="Development"`).
 
-When the app runs this way, outside Docker, the lab AD domain is not configured. The login page shows only the sample domains from `appsettings.json`, and they do not exist. To test the username and password login, run the full Docker setup.
+When the app runs this way, outside Docker, `dc1.lab.test` does not resolve, so username and password sign-in reports "temporarily unavailable". To test it, run the full Docker setup. Logs are written to the console and to `KeycloakMvc/logs/`.
 
 ## Configuration
 
-`KeycloakMvc/appsettings.Development.json` holds the local realm URL, client ID and demo secret. Docker overrides `Keycloak__MetadataAddress` to use the internal service address. Keycloak publishes the public issuer and browser URLs as `http://localhost:8080`, while dynamic backchannel URLs allow the MVC container to retrieve keys and redeem authorization codes internally. Issuer validation remains enabled.
+Each settings section binds to an options class and is validated at startup. Invalid settings stop the app with a fatal log entry.
+
+| Section | Options class | Purpose |
+|---|---|---|
+| `Keycloak` | `Authentication/Keycloak/KeycloakOptions.cs` | Realm URL, client, secret, optional `KerberosAmrValue` |
+| `ActiveDirectory` | `Authentication/ActiveDirectory/ActiveDirectoryOptions.cs` | AD domains for username/password sign-in |
+| `PermittedUsers` | `Authentication/PermittedUsers/PermittedUsersOptions.cs` | Users allowed to use the app after sign-in |
+| `Login` | `Authentication/LoginOptions.cs` | `SessionTimeoutMinutes` (sliding, default 60), `PasswordAttemptsPerMinute` (default 5) |
+| `FrameAncestors` | `Security/FrameAncestorsOptions.cs` | Origins allowed to embed the app in an iframe |
+| `Serilog` | Serilog configuration | Log levels and sinks |
+
+`appsettings.json` holds production defaults. `PermittedUsers` is empty there, so nobody is permitted until you list users. `KeycloakMvc/appsettings.Development.json` holds the local realm URL, client ID, demo secret, the lab AD domain and the permitted demo users. Docker overrides `Keycloak__MetadataAddress` to use the internal service address. Keycloak publishes the public issuer and browser URLs as `http://localhost:8080`, while dynamic backchannel URLs allow the MVC container to retrieve keys and redeem authorization codes internally. Issuer validation remains enabled.
 
 `keycloak/mvc-sample-realm.json` imports the realm, confidential client, PKCE requirement and demo user on first startup. Redirect URLs are restricted to the sample's exact callback URLs. If you change the port or hostname, update the realm callbacks, Keycloak hostname and application authority together.
 
@@ -45,6 +58,27 @@ Realm imports skip an existing realm. To apply JSON changes to an existing setup
 ```powershell
 docker compose logs -f
 docker compose down
+```
+
+### Project structure
+
+```text
+KeycloakMvc/
+├── Program.cs                     Composition only: calls the extension methods below
+├── Authentication/
+│   ├── AuthenticationExtensions.cs   AddAppAuthentication() / UseAppAuthentication()
+│   ├── AuthenticationConstants.cs    Sign-in paths and the rate limit policy name
+│   ├── AppClaimTypes.cs              Shared claim types and sign-in method names
+│   ├── AppPrincipalFactory.cs        Builds the session principal for AD users
+│   ├── AppCookieEvents.cs            Re-checks permitted users on every request
+│   ├── LoginOptions.cs
+│   ├── Keycloak/                     KeycloakOptions, OIDC events (claims, permitted users, failures)
+│   ├── ActiveDirectory/              Options, validator, LDAPS connection factory, IActiveDirectoryService
+│   └── PermittedUsers/               Options, validator, IPermittedUserService
+├── HealthChecks/                  /health and /health/ready, Keycloak and AD checks
+├── Logging/                       Serilog setup and request logging
+├── Security/                      iframe framing header (CSP frame-ancestors)
+├── Controllers/, Models/, Views/  MVC pages
 ```
 
 ## Hybrid authentication
@@ -64,6 +98,28 @@ Anonymous request ──► /Account/SelectAuthentication?ReturnUrl=...
 - The two methods never fall back to each other. A failed Keycloak sign-in shows `/Account/LoginFailed`.
 - Return URLs are used only when `Url.IsLocalUrl` accepts them. Anything else goes to `/`.
 - Password attempts are limited to 5 per minute per client IP (`Program.cs`, policy `login`). Behind a reverse proxy, configure `ForwardedHeaders` so the limiter sees client addresses. Per-account lockout is left to Active Directory.
+
+### Permitted users
+
+Signing in proves who the user is. The permitted users list decides whether that user may use the application. The list is checked after a successful sign-in with either method, before a session is created:
+
+```json
+"PermittedUsers": {
+  "Keycloak": [ "demo" ],
+  "ActiveDirectory": [ "alice@lab.test", "bob@lab.test" ]
+}
+```
+
+- **Keycloak** entries are Keycloak usernames (`preferred_username`). For Kerberos users, this is usually their Windows account name.
+- **ActiveDirectory** entries are `username@dns.domain`, where the domain is the `Domain` of a configured AD domain. A user named `alice` in another domain does not match.
+- Matching is case-insensitive. The two lists are separate, so the same name in Keycloak and in AD never grants access to the other provider.
+- An empty list permits nobody.
+
+A user who is not on the list sees **Not authorized** (`/Account/NotAuthorized`) with a **Back to sign-in options** button, and gets no session. For Keycloak users, the app also ends the Keycloak session, so they can sign in with another account. Every denial is logged as a warning.
+
+The list is re-read when `appsettings.json` changes, and every request re-checks it. Removing a user therefore ends their session on their next request, without a restart. Environment variables (for example `PermittedUsers__Keycloak__0=demo`) are only read at startup.
+
+Avoid adding users in `appsettings.json` and then overriding them in an environment file. Configuration merges arrays by index, so entries from the base file can survive. Keep each list in one place.
 
 ### Session claims
 
@@ -162,19 +218,57 @@ RUN update-ca-certificates
 
 The Dockerfile installs `libldap2`, which `System.DirectoryServices.Protocols` needs on Linux.
 
-**Local test domain.** `docker compose up` also starts `samba`, a Samba 4 AD domain controller built from `samba/`. It provisions the domain `lab.test` (NetBIOS `LAB`, DC `dc1.lab.test`) and its own CA for LDAPS. The `mvc` service replaces the first sample domain with it through `ActiveDirectory__Domains__0__*` environment variables, and trusts the lab CA through `LDAPTLS_CACERT`. Select **Lab (lab.test)** on the login page:
+**Local test domain.** `docker compose up` also starts `samba`, a Samba 4 AD domain controller built from `samba/`. It provisions the domain `lab.test` (NetBIOS `LAB`, DC `dc1.lab.test`) and its own CA for LDAPS. `appsettings.Development.json` replaces the first sample domain with it, and the `mvc` service trusts the lab CA through `LDAPTLS_CACERT`. Select **Lab (lab.test)** on the login page:
 
 | Username | Password | Result |
 |---|---|---|
 | `alice` | `Alice!Lab2026` | Signs in. Member of `App Admins`, mapped to the `Admin` role |
 | `bob` | `Bob!Lab2026` | Signs in with no roles |
 | `carol` | `Carol!Lab2026` | Rejected: account disabled |
+| `dave` | `Dave!Lab2026` | Valid password but not a permitted user: **Not authorized** |
+
+The Keycloak realm also has `guest` / `Guest123!`. That user is not permitted either, so it sees **Not authorized**. If your Keycloak volume predates this user, add it in the admin console or run `docker compose down -v`.
 
 Three wrong passwords lock an account for 5 minutes. `LAB\alice` and `alice@lab.test` also work. **Operations (ops.example.com)** stays unreachable, to show the "temporarily unavailable" message. The domain administrator is `Administrator` / `Admin!Lab2026`. The domain is provisioned again whenever the container is recreated, which resets users and lockouts.
 
 The lab container needs the `SYS_ADMIN` capability because Samba stores sysvol ACLs in extended attributes. It is a test fixture only; don't run it in production.
 
-**Using your real Active Directory.** Remove the `ActiveDirectory__*` and `LDAPTLS_CACERT` variables and the `samba` service from `compose.yaml`. Then set your domains in `appsettings.json` and trust your CA as described above. An MIT Kerberos KDC or a plain OpenLDAP server can't stand in for AD. Neither provides AD's `user@domain` bind, `sAMAccountName`, `objectGUID` or `userAccountControl`.
+**Using your real Active Directory.** Make these changes:
+
+1. Remove the `samba` service, the `samba-ca` volume and `LDAPTLS_CACERT` from `compose.yaml`.
+2. Set your domains under `ActiveDirectory` and your users under `PermittedUsers`, in `appsettings.json` or an environment-specific file.
+3. Trust your CA as described above. An MIT Kerberos KDC or a plain OpenLDAP server can't stand in for AD. Neither provides AD's `user@domain` bind, `sAMAccountName`, `objectGUID` or `userAccountControl`.
+
+## Logging
+
+Logging uses [Serilog](https://serilog.net/), configured entirely in the `Serilog` section of `appsettings.json`:
+
+- **Console:** short lines (`docker compose logs -f mvc`).
+- **File:** `logs/keycloakmvc-YYYYMMDD.log`, rolled daily and kept for 14 days. In the container this is `/app/logs`.
+- **Requests:** one line per request, with method, path, status and duration. The query string is never logged, because it can carry OIDC authorization codes. Health probes are logged at Verbose and static files at Debug, so they stay out of the default output.
+- **Startup failures,** such as invalid settings, are logged as Fatal before the app exits.
+
+Passwords, tokens and authorization codes are never logged. Sign-in outcomes are logged by username and domain, including AD's reason code for rejected passwords.
+
+To change verbosity, edit `Serilog:MinimumLevel`, for example `"Override": { "KeycloakMvc": "Debug" }`. To add sinks such as Seq, Elasticsearch or JSON files, add the sink package and an entry under `WriteTo`.
+
+## Health checks
+
+| Endpoint | Checks | Use |
+|---|---|---|
+| `/health` | The process answers | Liveness probe |
+| `/health/ready` | Keycloak's discovery document. An anonymous LDAPS rootDSE read on each AD domain, which also validates the certificate | Readiness probe, monitoring |
+
+Both endpoints are anonymous and return JSON:
+
+```json
+{"status":"Degraded","durationMs":49,"checks":[
+  {"name":"keycloak","status":"Healthy","description":"Keycloak is reachable.", ...},
+  {"name":"active-directory","status":"Degraded","description":"Unreachable: ops.example.com.",
+   "data":{"lab.test":"reachable","ops.example.com":"unreachable"}}]}
+```
+
+An unreachable AD domain reports **Degraded** (HTTP 200), because the other sign-in methods still work. An unreachable Keycloak reports **Unhealthy** (HTTP 503). Exception details are logged, not returned.
 
 ## Embedding in an iframe
 
@@ -287,7 +381,9 @@ This sample uses HTTP, Keycloak development mode, its local development database
 
 Build: `dotnet build KeycloakMvc`. With the Docker services running and Python 3 available, run `python scripts/smoke_test.py`. It checks:
 
+- `/health` and `/health/ready`, including per-domain AD status.
 - Anonymous users see the selection page and keep their return URL.
+- Users who are not permitted (`dave` in AD, `guest` in Keycloak) see **Not authorized** and get no session. The Keycloak user's Keycloak session is ended.
 - The login form validates input and rejects missing antiforgery tokens.
 - Active Directory sign-in against `lab.test`: success, wrong password, disabled account, wrong domain prefix, role mapping, and local-only logout.
 - Keycloak login with PKCE, claims, open-redirect protection, Keycloak logout, and login rate limiting.

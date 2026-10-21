@@ -25,15 +25,8 @@ services:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_HTTP_PORTS: "8080"
       Keycloak__MetadataAddress: http://keycloak:8080/realms/mvc-sample/.well-known/openid-configuration
-      # Replaces the first sample domain with the local Samba lab domain. Point these at your
-      # real Active Directory instead (and trust its CA) outside this sample.
-      ActiveDirectory__Domains__0__Name: Lab
-      ActiveDirectory__Domains__0__Domain: lab.test
-      ActiveDirectory__Domains__0__NetBiosName: LAB
-      ActiveDirectory__Domains__0__Server: dc1.lab.test
-      ActiveDirectory__Domains__0__RoleMappings__0__Group: CN=App Admins,CN=Users,DC=lab,DC=test
-      ActiveDirectory__Domains__0__RoleMappings__0__Role: Admin
-      # libldap trusts the lab CA for LDAPS. A real deployment adds its CA to the system store.
+      # The lab domain itself is configured in appsettings.Development.json. libldap trusts the
+      # lab CA for LDAPS; a real deployment adds its CA to the system store instead.
       LDAPTLS_CACERT: /etc/lab-ca/lab-ca.pem
     ports:
       - "127.0.0.1:5000:8080"

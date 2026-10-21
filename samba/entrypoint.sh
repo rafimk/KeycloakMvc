@@ -39,7 +39,8 @@ if [ ! -f /var/lib/samba/private/sam.ldb ]; then
     samba-tool user create alice 'Alice!Lab2026' --given-name=Alice --surname=Anderson
     samba-tool user create bob 'Bob!Lab2026' --given-name=Bob --surname=Brown
     samba-tool user create carol 'Carol!Lab2026' --given-name=Carol --surname=Clark
-    for user in alice bob carol; do samba-tool user setexpiry "$user" --noexpiry; done
+    samba-tool user create dave 'Dave!Lab2026' --given-name=Dave --surname=Davis
+    for user in alice bob carol dave; do samba-tool user setexpiry "$user" --noexpiry; done
     samba-tool group addmembers "App Admins" alice
     samba-tool user disable carol
 fi
