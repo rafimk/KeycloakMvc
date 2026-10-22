@@ -5,14 +5,28 @@ services:
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin-local-password
-      KC_HOSTNAME: http://localhost:8080
+      # Browser-facing URL. For Kerberos SSO from a browser, set KEYCLOAK_URL=http://keycloak.lab.test:8080
+      # (see README, Kerberos SSO with the lab domain); SPNEGO needs the host name in the service principal.
+      KC_HOSTNAME: ${KEYCLOAK_URL:-http://localhost:8080}
       KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
       KC_HEALTH_ENABLED: "true"
+      # Trusts the lab CA for LDAPS user federation against dc1.lab.test.
+      KC_TRUSTSTORE_PATHS: /etc/lab-ca/lab-ca.pem
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
       - ./keycloak/mvc-sample-realm.json:/opt/keycloak/data/import/mvc-sample-realm.json:ro
       - keycloak-data:/opt/keycloak/data
+      - ./kerberos/krb5.conf:/etc/krb5.conf:ro
+      - samba-ca:/etc/lab-ca:ro
+      - samba-keytab:/etc/keycloak-kerberos:ro
+    networks:
+      default:
+        aliases:
+          - keycloak.lab.test
+    depends_on:
+      samba:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000; printf 'GET /health/ready HTTP/1.0\r\n\r\n' >&3; grep -q '200 OK' <&3"]
       interval: 10s
@@ -24,6 +38,7 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_HTTP_PORTS: "8080"
+      Keycloak__Authority: ${KEYCLOAK_URL:-http://localhost:8080}/realms/mvc-sample
       Keycloak__MetadataAddress: http://keycloak:8080/realms/mvc-sample/.well-known/openid-configuration
       # The lab domain itself is configured in appsettings.Development.json. libldap trusts the
       # lab CA for LDAPS; a real deployment adds its CA to the system store instead.
@@ -48,8 +63,12 @@ services:
       - SYS_ADMIN
     environment:
       SAMBA_ADMIN_PASSWORD: Admin!Lab2026
+    # Kerberos KDC, for kinit from the host when testing SSO in a browser.
+    ports:
+      - "127.0.0.1:88:88"
     volumes:
       - samba-ca:/tls-export
+      - samba-keytab:/keytab-export
     networks:
       default:
         aliases:
@@ -60,7 +79,15 @@ services:
       timeout: 5s
       start_period: 60s
       retries: 24
+  # Kerberos SSO check. Not started by "up"; run: docker compose run --rm kerberos-client
+  kerberos-client:
+    build: ./kerberos
+    profiles: ["test"]
+    depends_on:
+      keycloak:
+        condition: service_healthy
 volumes:
   keycloak-data:
   mvc-keys:
   samba-ca:
+  samba-keytab:

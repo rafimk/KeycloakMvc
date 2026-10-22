@@ -26,7 +26,13 @@
       "pkce.code.challenge.method": "S256",
       "post.logout.redirect.uris": "http://localhost:5000/signout-callback-oidc"
     },
-    "defaultClientScopes": ["profile", "email", "roles", "web-origins"]
+    "defaultClientScopes": ["profile", "email", "roles", "web-origins"],
+    "protocolMappers": [{
+      "name": "amr",
+      "protocol": "openid-connect",
+      "protocolMapper": "oidc-amr-mapper",
+      "config": {"id.token.claim": "true", "access.token.claim": "false", "introspection.token.claim": "true"}
+    }]
   }],
   "users": [{
     "username": "demo",
@@ -44,5 +50,114 @@
     "lastName": "User",
     "email": "guest@example.com",
     "credentials": [{"type": "password", "value": "Guest123!", "temporary": false}]
+  }],
+  "components": {
+    "org.keycloak.storage.UserStorageProvider": [{
+      "name": "lab.test",
+      "providerId": "ldap",
+      "config": {
+        "enabled": ["true"],
+        "priority": ["0"],
+        "vendor": ["ad"],
+        "editMode": ["READ_ONLY"],
+        "importEnabled": ["true"],
+        "syncRegistrations": ["false"],
+        "connectionUrl": ["ldaps://dc1.lab.test"],
+        "useTruststoreSpi": ["always"],
+        "connectionPooling": ["true"],
+        "authType": ["simple"],
+        "bindDn": ["CN=keycloak-svc,CN=Users,DC=lab,DC=test"],
+        "bindCredential": ["Keycloak!Lab2026"],
+        "usersDn": ["CN=Users,DC=lab,DC=test"],
+        "searchScope": ["1"],
+        "userObjectClasses": ["person, organizationalPerson, user"],
+        "customUserSearchFilter": ["(!(sAMAccountName=keycloak-svc))"],
+        "usernameLDAPAttribute": ["sAMAccountName"],
+        "rdnLDAPAttribute": ["cn"],
+        "uuidLDAPAttribute": ["objectGUID"],
+        "pagination": ["true"],
+        "trustEmail": ["false"],
+        "allowKerberosAuthentication": ["true"],
+        "kerberosRealm": ["LAB.TEST"],
+        "serverPrincipal": ["HTTP/keycloak.lab.test@LAB.TEST"],
+        "keyTab": ["/etc/keycloak-kerberos/keycloak.keytab"],
+        "useKerberosForPasswordAuthentication": ["false"],
+        "cachePolicy": ["DEFAULT"]
+      },
+      "subComponents": {
+        "org.keycloak.storage.ldap.mappers.LDAPStorageMapper": [{
+          "name": "username",
+          "providerId": "user-attribute-ldap-mapper",
+          "config": {
+            "ldap.attribute": ["sAMAccountName"],
+            "user.model.attribute": ["username"],
+            "read.only": ["true"],
+            "always.read.value.from.ldap": ["false"],
+            "is.mandatory.in.ldap": ["true"]
+          }
+        }, {
+          "name": "first name",
+          "providerId": "user-attribute-ldap-mapper",
+          "config": {
+            "ldap.attribute": ["givenName"],
+            "user.model.attribute": ["firstName"],
+            "read.only": ["true"],
+            "always.read.value.from.ldap": ["true"],
+            "is.mandatory.in.ldap": ["false"]
+          }
+        }, {
+          "name": "last name",
+          "providerId": "user-attribute-ldap-mapper",
+          "config": {
+            "ldap.attribute": ["sn"],
+            "user.model.attribute": ["lastName"],
+            "read.only": ["true"],
+            "always.read.value.from.ldap": ["true"],
+            "is.mandatory.in.ldap": ["false"]
+          }
+        }, {
+          "name": "email",
+          "providerId": "user-attribute-ldap-mapper",
+          "config": {
+            "ldap.attribute": ["mail"],
+            "user.model.attribute": ["email"],
+            "read.only": ["true"],
+            "always.read.value.from.ldap": ["false"],
+            "is.mandatory.in.ldap": ["false"]
+          }
+        }, {
+          "name": "MSAD account controls",
+          "providerId": "msad-user-account-control-mapper",
+          "config": {}
+        }]
+      }
+    }]
+  },
+  "browserFlow": "browser with kerberos",
+  "authenticationFlows": [{
+    "alias": "browser with kerberos",
+    "description": "Browser flow with Kerberos (SPNEGO) and a username and password fallback",
+    "providerId": "basic-flow",
+    "topLevel": true,
+    "builtIn": false,
+    "authenticationExecutions": [
+      {"authenticator": "auth-cookie", "authenticatorFlow": false, "requirement": "ALTERNATIVE", "priority": 10, "userSetupAllowed": false},
+      {"authenticator": "auth-spnego", "authenticatorConfig": "kerberos reference", "authenticatorFlow": false, "requirement": "ALTERNATIVE", "priority": 20, "userSetupAllowed": false},
+      {"authenticator": "identity-provider-redirector", "authenticatorFlow": false, "requirement": "ALTERNATIVE", "priority": 25, "userSetupAllowed": false},
+      {"flowAlias": "browser with kerberos forms", "authenticatorFlow": true, "requirement": "ALTERNATIVE", "priority": 30, "userSetupAllowed": false}
+    ]
+  }, {
+    "alias": "browser with kerberos forms",
+    "description": "Username and password form",
+    "providerId": "basic-flow",
+    "topLevel": false,
+    "builtIn": false,
+    "authenticationExecutions": [
+      {"authenticator": "auth-username-password-form", "authenticatorFlow": false, "requirement": "REQUIRED", "priority": 10, "userSetupAllowed": false}
+    ]
+  }],
+  "authenticatorConfig": [{
+    "alias": "kerberos reference",
+    "config": {"default.reference.value": "kerberos", "default.reference.maxAge": "36000"}
   }]
 }

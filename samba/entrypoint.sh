@@ -36,13 +36,33 @@ if [ ! -f /var/lib/samba/private/sam.ldb ]; then
         --account-lockout-duration=5 --reset-account-lockout-after=5
 
     samba-tool group add "App Admins"
-    samba-tool user create alice 'Alice!Lab2026' --given-name=Alice --surname=Anderson
-    samba-tool user create bob 'Bob!Lab2026' --given-name=Bob --surname=Brown
-    samba-tool user create carol 'Carol!Lab2026' --given-name=Carol --surname=Clark
-    samba-tool user create dave 'Dave!Lab2026' --given-name=Dave --surname=Davis
+    samba-tool user create alice 'Alice!Lab2026' --given-name=Alice --surname=Anderson --mail-address=alice@lab.test
+    samba-tool user create bob 'Bob!Lab2026' --given-name=Bob --surname=Brown --mail-address=bob@lab.test
+    samba-tool user create carol 'Carol!Lab2026' --given-name=Carol --surname=Clark --mail-address=carol@lab.test
+    samba-tool user create dave 'Dave!Lab2026' --given-name=Dave --surname=Davis --mail-address=dave@lab.test
     for user in alice bob carol dave; do samba-tool user setexpiry "$user" --noexpiry; done
     samba-tool group addmembers "App Admins" alice
     samba-tool user disable carol
+
+    # Service account for Keycloak: LDAP user federation bind and the Kerberos (SPNEGO) service principal.
+    samba-tool user create keycloak-svc 'Keycloak!Lab2026' --description="Keycloak service account"
+    samba-tool user setexpiry keycloak-svc --noexpiry
+    samba-tool spn add HTTP/keycloak.lab.test keycloak-svc
+    # AES only (8 + 16). Without this the KDC issues RC4 service tickets, which Java rejects.
+    ldbmodify -H /var/lib/samba/private/sam.ldb <<'LDIF'
+dn: CN=keycloak-svc,CN=Users,DC=lab,DC=test
+changetype: modify
+replace: msDS-SupportedEncryptionTypes
+msDS-SupportedEncryptionTypes: 24
+LDIF
+fi
+
+# Share the Keycloak keytab with the Keycloak container. Its keys stay valid until the password changes.
+if [ -d /keytab-export ]; then
+    rm -f /keytab-export/keycloak.keytab
+    samba-tool domain exportkeytab /keytab-export/keycloak.keytab --principal="HTTP/keycloak.lab.test"
+    # Keycloak runs as a non-root user. Development only: a real keytab is readable by the service alone.
+    chmod 644 /keytab-export/keycloak.keytab
 fi
 
 # Share the CA certificate with the MVC container so it can validate LDAPS.
