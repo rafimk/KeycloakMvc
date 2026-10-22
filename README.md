@@ -13,6 +13,7 @@ Open http://localhost:5000. Visitors see a sign-in page with two choices: **Logi
 - Demo username: `demo`
 - Demo password: `Demo123!`
 - Username and password login (local AD test domain **Lab**): `alice` / `Alice!Lab2026` (see [Local test domain](#active-directory-login-with-username-and-password))
+- Kerberos SSO through Keycloak against the lab domain: `docker compose run --rm kerberos-client` (see [Kerberos SSO with the lab domain](#kerberos-sso-with-the-lab-domain))
 - Not permitted, to test **Not authorized**: `guest` / `Guest123!` (Keycloak), `dave` / `Dave!Lab2026` (AD)
 - Health: http://localhost:5000/health and http://localhost:5000/health/ready
 - Keycloak admin console: http://localhost:8080/admin
@@ -165,7 +166,7 @@ The flow is only silent when all of these are true:
 
 - **Domain sign-in:** the computer is joined to the domain and the user signed in to Windows with a domain account. Windows Home editions cannot join a domain.
 - **Browser trust:** the browser trusts the Keycloak host for Negotiate authentication (step 4 above). For Firefox, set `network.negotiate-auth.trusted-uris`.
-- **Host name:** the browser reaches Keycloak by the host name in the service principal, such as `https://sso.corp.example.com` for `HTTP/sso.corp.example.com@CORP.EXAMPLE.COM`. Kerberos does not work with `localhost` or an IP address, so this sample's `http://localhost:8080` setup cannot demonstrate it.
+- **Host name:** the browser reaches Keycloak by the host name in the service principal, such as `https://sso.corp.example.com` for `HTTP/sso.corp.example.com@CORP.EXAMPLE.COM`. Kerberos does not work with `localhost` or an IP address. To try it with this sample, see [Kerberos SSO with the lab domain](#kerberos-sso-with-the-lab-domain).
 
 When Kerberos fails, for example because there is no ticket or the browser does not trust the host, Keycloak decides what happens next:
 
@@ -181,6 +182,45 @@ Without Kerberos configured, Keycloak shows its normal login form and the app re
 1. Set a reference value, for example `kerberos`, on the Kerberos execution.
 2. Add the **Authentication Method Reference (AMR)** mapper to the client with **Add to ID token** turned on.
 3. Set `Keycloak__KerberosAmrValue=kerberos`.
+
+The sample realm and `appsettings.Development.json` already do all three. Keycloak drops the reference once its max age (`default.reference.maxAge`, in seconds) has passed. Without a max age, it is dropped whenever the code is redeemed in a later second than the sign-in, so the realm sets it to the SSO session length.
+
+#### Kerberos SSO with the lab domain
+
+The [local test domain](#active-directory-login-with-username-and-password) doubles as the Kerberos realm `LAB.TEST`. The sample realm `mvc-sample` is configured for it:
+
+- **Service principal.** `samba/entrypoint.sh` creates the account `keycloak-svc` with the SPN `HTTP/keycloak.lab.test`, limited to AES. Without the AES limit, the KDC issues RC4 tickets, which Java rejects. On every start, it exports the keytab to the `samba-keytab` volume. Keycloak mounts the volume at `/etc/keycloak-kerberos`, with `kerberos/krb5.conf` as `/etc/krb5.conf`.
+- **User federation.** The realm has an LDAP provider `lab.test`: AD vendor, read-only, `ldaps://dc1.lab.test` bound as `keycloak-svc`, with Kerberos authentication enabled. Keycloak trusts the lab CA through `KC_TRUSTSTORE_PATHS`. A realm import does not add the default LDAP mappers, so the realm lists them, including **MSAD account controls**, which keeps disabled AD accounts disabled.
+- **Browser flow.** The realm uses `browser with kerberos`: Cookie, Kerberos and Identity Provider Redirector as alternatives, then the username and password form. Keycloak never switches the Kerberos step on by itself for imported providers.
+
+Lab users can therefore also sign in to Keycloak with their AD password. `alice` is on the Keycloak permitted users list. `bob` signs in to Keycloak but sees **Not authorized** in the app.
+
+Without a ticket, Keycloak now answers the login request with `401` and `WWW-Authenticate: Negotiate`. The page submits itself and continues to the password form, so in a browser it is one short extra redirect.
+
+**Automated check.** The `kerberos-client` service is not started by `up`. Run it with:
+
+```powershell
+docker compose run --rm kerberos-client
+```
+
+It runs `kerberos/sso_test.sh` on the compose network, where Keycloak is also reachable as `keycloak.lab.test`. The script:
+
+- confirms that Keycloak offers Negotiate when there is no ticket;
+- runs `kinit alice` and `kinit bob`, then sends the app's authorization code + PKCE request with `curl --negotiate`;
+- redeems the code and checks `preferred_username` and `amr: ["kerberos"]` in the ID token;
+- confirms that the KDC gives disabled `carol` no ticket.
+
+`scripts/smoke_test.py` runs it too.
+
+**From a browser.** Your Windows computer is not joined to `lab.test`, so it needs a ticket from MIT Kerberos, and the browser must reach Keycloak as `keycloak.lab.test`. The steps below are a guide only: the automated check proves the Keycloak and Samba side, but this sample has not tested a browser on Windows.
+
+1. Create `.env` next to `compose.yaml` with `KEYCLOAK_URL=http://keycloak.lab.test:8080`, then run `docker compose up -d --force-recreate`. This sets Keycloak's `KC_HOSTNAME` and the app's `Keycloak__Authority`. Keep the setting in `.env`: running a compose command without it, such as `docker compose run kerberos-client`, recreates Keycloak with `localhost`. Restart `mvc` after Keycloak changes host name, because the app caches the discovery document.
+2. As administrator, add `127.0.0.1 keycloak.lab.test dc1.lab.test` to `C:\Windows\System32\drivers\etc\hosts`. The `samba` service publishes the KDC on `127.0.0.1:88` (TCP).
+3. Install MIT Kerberos for Windows. Copy the `[libdefaults]`, `[realms]` and `[domain_realm]` sections of `kerberos/krb5.conf` into `C:\ProgramData\MIT\Kerberos5\krb5.ini`, then run `kinit alice@LAB.TEST` with password `Alice!Lab2026`.
+4. In Firefox `about:config`, set `network.negotiate-auth.trusted-uris` to `keycloak.lab.test` and `network.auth.use_sspi` to `false`, so Firefox uses the MIT ticket instead of Windows sign-in.
+5. Open http://localhost:5000 and choose **Login with Logged-in User**. The home page should show **Keycloak Kerberos SSO** for Alice Anderson without a password prompt.
+
+Remove `.env` and run `docker compose up -d --force-recreate` to go back to `localhost`.
 
 ### Active Directory (Login with Username and Password)
 
@@ -235,7 +275,7 @@ The lab container needs the `SYS_ADMIN` capability because Samba stores sysvol A
 
 **Using your real Active Directory.** Make these changes:
 
-1. Remove the `samba` service, the `samba-ca` volume and `LDAPTLS_CACERT` from `compose.yaml`.
+1. Remove the `samba` and `kerberos-client` services, the `samba-ca` and `samba-keytab` volumes, `LDAPTLS_CACERT`, `KC_TRUSTSTORE_PATHS` and the Kerberos mounts from `compose.yaml`. Then point the realm's `lab.test` user federation at your domain, or remove it, and use your own service principal and keytab.
 2. Set your domains under `ActiveDirectory` and your users under `PermittedUsers`, in `appsettings.json` or an environment-specific file.
 3. Trust your CA as described above. An MIT Kerberos KDC or a plain OpenLDAP server can't stand in for AD. Neither provides AD's `user@domain` bind, `sAMAccountName`, `objectGUID` or `userAccountControl`.
 
@@ -387,6 +427,8 @@ Build: `dotnet build KeycloakMvc`. With the Docker services running and Python 3
 - The login form validates input and rejects missing antiforgery tokens.
 - Active Directory sign-in against `lab.test`: success, wrong password, disabled account, wrong domain prefix, role mapping, and local-only logout.
 - Keycloak login with PKCE, claims, open-redirect protection, Keycloak logout, and login rate limiting.
+- LDAP user federation: `alice` signs in to Keycloak with her AD password; disabled `carol` is refused.
+- Kerberos SSO through Keycloak, with the `kerberos-client` container (see [Kerberos SSO with the lab domain](#kerberos-sso-with-the-lab-domain)).
 
-Kerberos SSO is not covered, because it needs a domain-joined client and a Keycloak host with a matching service principal.
+A Windows browser that uses Kerberos is not covered. That needs a client set up as described in that section.
 

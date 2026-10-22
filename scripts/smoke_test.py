@@ -2,7 +2,9 @@
 import html
 import http.cookiejar
 import json
+import pathlib
 import re
+import subprocess
 import time
 import urllib.error
 import urllib.parse
@@ -26,9 +28,17 @@ def antiforgery(body):
     return html.unescape(re.search(r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', body).group(1))
 
 def keycloak_login(return_url):
-    """Choose "Login with Logged-in User" and return the Keycloak login page."""
+    """Choose "Login with Logged-in User" and return the Keycloak login page.
+
+    With no Kerberos ticket, Keycloak answers 401 Negotiate with a page that submits itself to continue
+    to the password form. Submit it, as a browser would."""
     page = get(f"{SELECT}?ReturnUrl={urllib.parse.quote(return_url)}").read().decode()
-    response = post(f"{APP}/Account/LoginWithLoggedUser", {"__RequestVerificationToken": antiforgery(page), "returnUrl": return_url})
+    try:
+        response = post(f"{APP}/Account/LoginWithLoggedUser", {"__RequestVerificationToken": antiforgery(page), "returnUrl": return_url})
+    except urllib.error.HTTPError as error:
+        assert error.code == 401 and error.headers["WWW-Authenticate"] == "Negotiate", error
+        action = html.unescape(re.search(r'ACTION="([^"]+)"', error.read().decode()).group(1))
+        response = post(action, {})
     assert response.url.startswith("http://localhost:8080/"), response.url
     return response
 
@@ -142,6 +152,18 @@ logout = post(f"{APP}/Account/Logout", {"__RequestVerificationToken": antiforger
 assert logout.url == SELECT, logout.url
 assert 'name="password"' in keycloak_login("/").read().decode(), "Keycloak session survived logout"
 
+# lab.test users also sign in to Keycloak with their AD password, through LDAP user federation.
+url, body = keycloak_password_login("alice", "Alice!Lab2026", "/Account/Profile")
+assert "Signed in as <strong>alice</strong>" in body and "KeycloakSso" in body, "Federated AD user did not sign in"
+home = get(f"{APP}/").read().decode()
+post(f"{APP}/Account/Logout", {"__RequestVerificationToken": antiforgery(home)})
+url, body = keycloak_password_login("carol", "Carol!Lab2026")
+assert url.startswith("http://localhost:8080/") and 'name="password"' in body, "Disabled AD account signed in to Keycloak"
+
+# Kerberos SSO through Keycloak, from a container that holds a lab.test ticket (kerberos/sso_test.sh).
+subprocess.run(["docker", "compose", "run", "--rm", "-T", "kerberos-client"],
+               cwd=pathlib.Path(__file__).resolve().parent.parent, check=True)
+
 # Password attempts are rate limited per client (5 per fixed one-minute window, so 11
 # back-to-back attempts must hit the limit even if one window boundary passes).
 token = antiforgery(get(f"{APP}/Account/Login").read().decode())
@@ -155,4 +177,4 @@ else:
 
 print("PASS: health checks, selection page, return URL, AD form validation, AD sign-in/rejections/roles/logout, "
       "permitted users (AD and Keycloak), PKCE Keycloak login, claims, open-redirect protection, "
-      "Keycloak logout and login rate limiting")
+      "Keycloak logout, LDAP federation, Kerberos SSO and login rate limiting")
