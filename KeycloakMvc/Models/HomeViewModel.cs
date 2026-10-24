@@ -10,6 +10,9 @@ public class HomeViewModel
 
     public bool IsActiveDirectory { get; set; }
 
+    /// <summary>Primary or Secondary, for Keycloak sign-ins.</summary>
+    public string? KeycloakInstance { get; set; }
+
     /// <summary>The AD domain, or the Keycloak issuer URL.</summary>
     public string? Domain { get; set; }
 }

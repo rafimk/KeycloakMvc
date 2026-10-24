@@ -19,6 +19,9 @@ public sealed class PermittedUserService(IOptionsMonitor<PermittedUsersOptions> 
             return !string.IsNullOrEmpty(domain) &&
                 permitted.ActiveDirectory.Contains($"{userName}@{domain}", StringComparer.OrdinalIgnoreCase);
         }
-        return permitted.Keycloak.Contains(userName, StringComparer.OrdinalIgnoreCase);
+        var instance = user.FindFirstValue(AppClaimTypes.KeycloakInstance);
+        return permitted.Keycloak
+            .Where(pair => string.Equals(pair.Key, instance, StringComparison.OrdinalIgnoreCase))
+            .Any(pair => pair.Value.Contains(userName, StringComparer.OrdinalIgnoreCase));
     }
 }

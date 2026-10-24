@@ -14,6 +14,8 @@ public static class AppClaimTypes
     public const string AuthenticationMethod = "app_auth_method";
     /// <summary>The AD domain, or the Keycloak issuer URL.</summary>
     public const string AuthenticationDomain = "app_auth_domain";
+    /// <summary>The Keycloak instance name (Primary or Secondary). Not set for Active Directory.</summary>
+    public const string KeycloakInstance = "app_keycloak_instance";
 }
 
 public static class AppAuthenticationMethods

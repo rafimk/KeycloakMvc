@@ -1,3 +1,4 @@
+using KeycloakMvc.Authentication.Keycloak;
 using Microsoft.Extensions.Options;
 
 namespace KeycloakMvc.Authentication.PermittedUsers;
@@ -7,8 +8,14 @@ public sealed class PermittedUsersOptionsValidator : IValidateOptions<PermittedU
     public ValidateOptionsResult Validate(string? name, PermittedUsersOptions options)
     {
         var errors = new List<string>();
-        if (options.Keycloak.Any(string.IsNullOrWhiteSpace))
-            errors.Add($"{PermittedUsersOptions.SectionName}:Keycloak must not contain empty entries.");
+        foreach (var (instance, users) in options.Keycloak)
+        {
+            var path = $"{PermittedUsersOptions.SectionName}:Keycloak:{instance}";
+            if (KeycloakInstances.Find(instance) is null)
+                errors.Add($"{path} is not a Keycloak instance. Use {string.Join(" or ", KeycloakInstances.All.Select(i => i.Name))}.");
+            if (users.Any(string.IsNullOrWhiteSpace))
+                errors.Add($"{path} must not contain empty entries.");
+        }
         foreach (var entry in options.ActiveDirectory)
         {
             var parts = entry?.Split('@') ?? [];

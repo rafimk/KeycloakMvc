@@ -1,11 +1,11 @@
 using System.Security.Claims;
 using KeycloakMvc.Authentication;
 using KeycloakMvc.Authentication.ActiveDirectory;
+using KeycloakMvc.Authentication.Keycloak;
 using KeycloakMvc.Authentication.PermittedUsers;
 using KeycloakMvc.Models;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
-using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Rendering;
@@ -17,6 +17,8 @@ public class AccountController(
     IActiveDirectoryService activeDirectory,
     IPermittedUserService permittedUsers,
     IOptions<ActiveDirectoryOptions> activeDirectoryOptions,
+    IOptions<LoginOptions> loginOptions,
+    IOptionsMonitor<KeycloakOptions> keycloakOptions,
     ILogger<AccountController> logger) : Controller
 {
     private const string InvalidCredentialsMessage = "The username, password or domain is incorrect.";
@@ -30,20 +32,29 @@ public class AccountController(
         return View(new SelectAuthenticationViewModel
         {
             ReturnUrl = SafeReturnUrl(returnUrl),
-            PasswordLoginEnabled = activeDirectoryOptions.Value.Domains.Count > 0,
+            KeycloakInstances = KeycloakInstances.All
+                .Select(instance => (instance, options: keycloakOptions.Get(instance.Scheme)))
+                .Select(pair => new KeycloakSignInOption(pair.instance.Name, pair.options.DisplayName, pair.options.Description))
+                .ToList(),
         });
     }
 
-    // Starts the existing Keycloak OIDC flow. Keycloak's browser flow decides whether Kerberos is used,
-    // and KeycloakOpenIdConnectEvents enforces the permitted users list.
+    // Starts the OIDC flow of the chosen Keycloak instance. Its browser flow decides whether Kerberos
+    // is used, and KeycloakOpenIdConnectEvents enforces the permitted users list.
     [AllowAnonymous, HttpPost, ValidateAntiForgeryToken]
-    public IActionResult LoginWithLoggedUser(string? returnUrl = null) => Challenge(
-        new AuthenticationProperties { RedirectUri = SafeReturnUrl(returnUrl) },
-        OpenIdConnectDefaults.AuthenticationScheme);
+    public IActionResult LoginWithKeycloak(string? instance, string? returnUrl = null)
+    {
+        var keycloak = KeycloakInstances.Find(instance);
+        if (keycloak is null)
+            return BadRequest();
+        return Challenge(new AuthenticationProperties { RedirectUri = SafeReturnUrl(returnUrl) }, keycloak.Scheme);
+    }
 
     [AllowAnonymous, HttpGet]
     public IActionResult Login(string? returnUrl = null, bool throttled = false)
     {
+        if (!loginOptions.Value.PasswordLoginEnabled)
+            return NotFound();
         if (User.Identity?.IsAuthenticated == true)
             return LocalRedirect(SafeReturnUrl(returnUrl));
         if (throttled)
@@ -58,6 +69,8 @@ public class AccountController(
     [EnableRateLimiting(AuthenticationConstants.PasswordLoginRateLimitPolicy)]
     public async Task<IActionResult> Login(LoginViewModel model, CancellationToken cancellationToken)
     {
+        if (!loginOptions.Value.PasswordLoginEnabled)
+            return NotFound();
         model.ReturnUrl = SafeReturnUrl(model.ReturnUrl);
         if (!activeDirectoryOptions.Value.Domains.Any(d => string.Equals(d.Domain, model.Domain, StringComparison.OrdinalIgnoreCase)))
             ModelState.AddModelError(nameof(LoginViewModel.Domain), "Select a domain from the list.");
@@ -102,16 +115,18 @@ public class AccountController(
     public async Task<IActionResult> Logout()
     {
         var afterLogout = Url.Action(nameof(SelectAuthentication))!;
-        if (User.FindFirstValue(AppClaimTypes.AuthenticationMethod) == AppAuthenticationMethods.ActiveDirectory)
+        var keycloak = KeycloakInstances.Find(User.FindFirstValue(AppClaimTypes.KeycloakInstance));
+        if (keycloak is null)
         {
             // AD sessions are local only; there is no Keycloak session to end.
             await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
             return LocalRedirect(afterLogout);
         }
+        // Ends the session at the Keycloak instance the user signed in with.
         return SignOut(
             new AuthenticationProperties { RedirectUri = afterLogout },
             CookieAuthenticationDefaults.AuthenticationScheme,
-            OpenIdConnectDefaults.AuthenticationScheme);
+            keycloak.Scheme);
     }
 
     private string SafeReturnUrl(string? returnUrl) => Url.IsLocalUrl(returnUrl) ? returnUrl : "/";

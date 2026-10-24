@@ -7,9 +7,12 @@ using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 
 namespace KeycloakMvc.Authentication.Keycloak;
 
-/// <summary>Adds the application's claims to Keycloak sign-ins and enforces the permitted users list.</summary>
+/// <summary>
+/// Adds the application's claims to Keycloak sign-ins and enforces the permitted users list.
+/// Shared by every Keycloak instance; the scheme name tells which one is signing in.
+/// </summary>
 public sealed class KeycloakOpenIdConnectEvents(
-    IOptions<KeycloakOptions> keycloakOptions,
+    IOptionsMonitor<KeycloakOptions> keycloakOptions,
     IPermittedUserService permittedUsers,
     ILogger<KeycloakOpenIdConnectEvents> logger) : OpenIdConnectEvents
 {
@@ -18,7 +21,8 @@ public sealed class KeycloakOpenIdConnectEvents(
         // Runs after Keycloak's signature, issuer, audience, nonce and PKCE checks have passed.
         var identity = (ClaimsIdentity)context.Principal!.Identity!;
         var token = context.SecurityToken;
-        var kerberosAmr = keycloakOptions.Value.KerberosAmrValue;
+        var instance = KeycloakInstances.FindByScheme(context.Scheme.Name);
+        var kerberosAmr = keycloakOptions.Get(instance.Scheme).KerberosAmrValue;
         var method = !string.IsNullOrEmpty(kerberosAmr) && identity.HasClaim("amr", kerberosAmr)
             ? AppAuthenticationMethods.KeycloakKerberos
             : AppAuthenticationMethods.KeycloakSso;
@@ -27,11 +31,13 @@ public sealed class KeycloakOpenIdConnectEvents(
             new(AppClaimTypes.UserId, $"keycloak|{token.Issuer}|{token.Subject}"),
             new(AppClaimTypes.AuthenticationMethod, method),
             new(AppClaimTypes.AuthenticationDomain, token.Issuer),
+            new(AppClaimTypes.KeycloakInstance, instance.Name),
         ]);
 
         if (!permittedUsers.IsPermitted(context.Principal))
         {
-            logger.LogWarning("Keycloak user {UserName} signed in but is not a permitted user", identity.Name);
+            logger.LogWarning("Keycloak {Instance} user {UserName} signed in but is not a permitted user",
+                instance.Name, identity.Name);
             await DenyAndEndKeycloakSessionAsync(context);
         }
     }

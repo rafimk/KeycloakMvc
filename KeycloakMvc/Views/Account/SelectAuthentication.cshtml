@@ -2,6 +2,7 @@
 @{
     Layout = "_AuthLayout";
     ViewData["Title"] = "Sign in";
+    string[] icons = ["monitor", "server"];
 }
 <div class="auth-header">
     <span class="auth-logo"><icon name="shield-check" /></span>
@@ -10,39 +11,26 @@
 </div>
 
 <div class="auth-options">
-    <form asp-controller="Account" asp-action="LoginWithLoggedUser" method="post">
-        <input type="hidden" name="returnUrl" value="@Model.ReturnUrl" />
-        <button type="submit" class="auth-option" aria-describedby="option-sso-description">
-            <span class="auth-option__icon"><icon name="monitor" /></span>
-            <span class="auth-option__text">
-                <span class="auth-option__title">Login with Logged-in User</span>
-                <span class="auth-option__description" id="option-sso-description">Sign in securely using your Windows account.</span>
-            </span>
-            <icon name="chevron-right" />
-        </button>
-    </form>
-
-    @if (Model.PasswordLoginEnabled)
+    @for (var i = 0; i < Model.KeycloakInstances.Count; i++)
     {
-        <a class="auth-option" asp-controller="Account" asp-action="Login" asp-route-returnUrl="@Model.ReturnUrl"
-           aria-describedby="option-password-description">
-            <span class="auth-option__icon"><icon name="key-round" /></span>
-            <span class="auth-option__text">
-                <span class="auth-option__title">Login with Username and Password</span>
-                <span class="auth-option__description" id="option-password-description">Use your Active Directory credentials.</span>
-            </span>
-            <icon name="chevron-right" />
-        </a>
-    }
-    else
-    {
-        <div class="auth-option is-disabled" aria-disabled="true">
-            <span class="auth-option__icon"><icon name="key-round" /></span>
-            <span class="auth-option__text">
-                <span class="auth-option__title">Login with Username and Password</span>
-                <span class="auth-option__description">No Active Directory domains are configured.</span>
-            </span>
-        </div>
+        var option = Model.KeycloakInstances[i];
+        var descriptionId = $"option-{option.Instance.ToLowerInvariant()}-description";
+        <form asp-controller="Account" asp-action="LoginWithKeycloak" method="post">
+            <input type="hidden" name="instance" value="@option.Instance" />
+            <input type="hidden" name="returnUrl" value="@Model.ReturnUrl" />
+            <button type="submit" class="auth-option" aria-describedby="@(option.Description is null ? null : descriptionId)">
+                <span class="auth-option__icon"><icon name="@icons[i % icons.Length]" /></span>
+                @* dir="auto" lays the configured labels out right to left when they are Arabic. *@
+                <span class="auth-option__text" dir="auto">
+                    <span class="auth-option__title">@option.DisplayName</span>
+                    @if (option.Description is not null)
+                    {
+                        <span class="auth-option__description" id="@descriptionId">@option.Description</span>
+                    }
+                </span>
+                <icon name="chevron-right" />
+            </button>
+        </form>
     }
 </div>
 

@@ -8,19 +8,25 @@ Install Docker Desktop with Linux containers, then run from this folder:
 docker compose up -d --build
 ```
 
-Open http://localhost:5000. Visitors see a sign-in page with two choices: **Login with Logged-in User** (Keycloak single sign-on) and **Login with Username and Password** (Active Directory). After signing in, the application home page opens, or the page originally requested. Signing out returns to the sign-in page. See [Hybrid authentication](#hybrid-authentication).
+Open http://localhost:5000. Visitors see a sign-in page with two buttons, one per Keycloak instance (see [Two Keycloak instances](#two-keycloak-instances)):
 
-- Demo username: `demo`
-- Demo password: `Demo123!`
-- Username and password login (local AD test domain **Lab**): `alice` / `Alice!Lab2026` (see [Local test domain](#active-directory-login-with-username-and-password))
-- Kerberos SSO through Keycloak against the lab domain: `docker compose run --rm kerberos-client` (see [Kerberos SSO with the lab domain](#kerberos-sso-with-the-lab-domain))
-- Not permitted, to test **Not authorized**: `guest` / `Guest123!` (Keycloak), `dave` / `Dave!Lab2026` (AD)
+- **تسجيل الدخول عبر Keycloak الأول**: the **Primary** instance, http://localhost:8080, realm `mvc-sample`, with Kerberos SSO and the lab AD federation.
+- **تسجيل الدخول عبر Keycloak الثاني**: the **Secondary** instance, http://localhost:8081, realm `mvc-secondary`, a separate Keycloak server with its own users.
+
+After signing in, the application home page opens, or the page originally requested. Signing out returns to the sign-in page.
+
+- Primary demo user: `demo` / `Demo123!` (the lab AD users such as `alice` / `Alice!Lab2026` also work, through federation)
+- Secondary demo user: `partner` / `Partner123!`
+- Kerberos SSO through the Primary instance against the lab domain: `docker compose run --rm kerberos-client` (see [Kerberos SSO with the lab domain](#kerberos-sso-with-the-lab-domain))
+- Not permitted, to test **Not authorized**: `guest` / `Guest123!` (Primary), `demo` / `Demo123!` (Secondary: the same name as the Primary user, but only permitted on Primary)
 - Health: http://localhost:5000/health and http://localhost:5000/health/ready
-- Keycloak admin console: http://localhost:8080/admin
+- Keycloak admin consoles: http://localhost:8080/admin and http://localhost:8081/admin
 - Admin username: `admin`
 - Admin password: `admin-local-password`
 
-The protected `/Account/Profile` page displays identity claims. For Keycloak sign-ins, sign out ends both the MVC cookie session and the Keycloak session. For Active Directory sign-ins, it ends only the MVC session. Logout uses a POST with antiforgery validation.
+The protected `/Account/Profile` page displays identity claims. Sign out ends the MVC cookie session and the session at the Keycloak instance the user signed in with. Logout uses a POST with antiforgery validation.
+
+The Active Directory username and password sign-in is still in the code but is switched off (`Login:PasswordLoginEnabled` is `false`). Its pages answer 404 and the sign-in page does not show it. See [Active Directory](#active-directory-login-with-username-and-password).
 
 `python scripts/smoke_test.py` checks the running sample end to end.
 
@@ -29,7 +35,7 @@ The protected `/Account/Profile` page displays identity claims. For Keycloak sig
 With the .NET 10 SDK installed:
 
 ```powershell
-docker compose up -d keycloak
+docker compose up -d keycloak keycloak-secondary
 dotnet run --project KeycloakMvc --no-launch-profile --urls http://localhost:5000
 ```
 
@@ -43,16 +49,16 @@ Each settings section binds to an options class and is validated at startup. Inv
 
 | Section | Options class | Purpose |
 |---|---|---|
-| `Keycloak` | `Authentication/Keycloak/KeycloakOptions.cs` | Realm URL, client, secret, optional `KerberosAmrValue` |
+| `Keycloak:Primary`, `Keycloak:Secondary` | `Authentication/Keycloak/KeycloakOptions.cs` | Per instance: button `DisplayName` and `Description`, realm URL, client, secret, optional `KerberosAmrValue` |
 | `ActiveDirectory` | `Authentication/ActiveDirectory/ActiveDirectoryOptions.cs` | AD domains for username/password sign-in |
 | `PermittedUsers` | `Authentication/PermittedUsers/PermittedUsersOptions.cs` | Users allowed to use the app after sign-in |
-| `Login` | `Authentication/LoginOptions.cs` | `SessionTimeoutMinutes` (sliding, default 60), `PasswordAttemptsPerMinute` (default 5) |
+| `Login` | `Authentication/LoginOptions.cs` | `SessionTimeoutMinutes` (sliding, default 60), `PasswordLoginEnabled` (default `false`), `PasswordAttemptsPerMinute` (default 5) |
 | `FrameAncestors` | `Security/FrameAncestorsOptions.cs` | Origins allowed to embed the app in an iframe |
 | `Serilog` | Serilog configuration | Log levels and sinks |
 
-`appsettings.json` holds production defaults. `PermittedUsers` is empty there, so nobody is permitted until you list users. `KeycloakMvc/appsettings.Development.json` holds the local realm URL, client ID, demo secret, the lab AD domain and the permitted demo users. Docker overrides `Keycloak__MetadataAddress` to use the internal service address. Keycloak publishes the public issuer and browser URLs as `http://localhost:8080`, while dynamic backchannel URLs allow the MVC container to retrieve keys and redeem authorization codes internally. Issuer validation remains enabled.
+`appsettings.json` holds production defaults, including the Arabic button labels. `PermittedUsers` is empty there, so nobody is permitted until you list users. `KeycloakMvc/appsettings.Development.json` holds both instances' realm URLs, client IDs and demo secrets, the lab AD domain and the permitted demo users. Docker overrides `Keycloak__Primary__MetadataAddress` and `Keycloak__Secondary__MetadataAddress` to use the internal service addresses. Each Keycloak publishes its public issuer and browser URLs as `http://localhost:8080` or `http://localhost:8081`, while dynamic backchannel URLs allow the MVC container to retrieve keys and redeem authorization codes internally. Issuer validation remains enabled.
 
-`keycloak/mvc-sample-realm.json` imports the realm, confidential client, PKCE requirement and demo user on first startup. Redirect URLs are restricted to the sample's exact callback URLs. If you change the port or hostname, update the realm callbacks, Keycloak hostname and application authority together.
+`keycloak/mvc-sample-realm.json` (Primary) and `keycloak/mvc-secondary-realm.json` (Secondary) import each realm, confidential client, PKCE requirement and demo users on first startup. Redirect URLs are restricted to the sample's exact callback URLs. If you change the port or hostname, update the realm callbacks, Keycloak hostname and application authority together.
 
 Realm imports skip an existing realm. To apply JSON changes to an existing setup, edit through the admin console or reset the sample volumes with `docker compose down -v` (this deletes sample users, sessions and persisted settings), then start again.
 
@@ -82,23 +88,52 @@ KeycloakMvc/
 ├── Controllers/, Models/, Views/  MVC pages
 ```
 
-## Hybrid authentication
+## Two Keycloak instances
 
 ```text
 Anonymous request ──► /Account/SelectAuthentication?ReturnUrl=...
-                         │                               │
-     Login with Logged-in User (POST)        Login with Username and Password
-                         │                               │
-     Keycloak OIDC (code + PKCE)              /Account/Login (username, password, domain)
-     Keycloak browser flow: Kerberos/SPNEGO   LDAPS bind to the selected AD domain
-                         │                               │
-                         └──────► MVC cookie session ◄───┘ ──► return URL or Home
+                         │                                   │
+   تسجيل الدخول عبر Keycloak الأول              تسجيل الدخول عبر Keycloak الثاني
+   POST LoginWithKeycloak instance=Primary      POST LoginWithKeycloak instance=Secondary
+                         │                                   │
+   Scheme KeycloakPrimary (code + PKCE)         Scheme KeycloakSecondary (code + PKCE)
+   localhost:8080, realm mvc-sample             localhost:8081, realm mvc-secondary
+   Kerberos/SPNEGO, lab AD federation           realm users only
+   callback /signin-oidc                        callback /signin-oidc-secondary
+                         │                                   │
+                         └──────► MVC cookie session ◄───────┘ ──► return URL or Home
 ```
 
+- `Authentication/Keycloak/KeycloakInstances.cs` defines the two instances. Each is its own OpenID Connect scheme with its own settings section, callback paths (`CallbackPath`, `SignedOutCallbackPath`, `RemoteSignOutPath`) and issuer check. A token from one instance is never accepted by the other's handler.
+- Primary keeps the handler's default paths, so the existing `mvc-sample` realm needs no change. Secondary uses the `-secondary` paths, which `mvc-secondary-realm.json` allows.
+- The session records which instance signed the user in (`app_keycloak_instance`). Logout ends the session at that instance only.
 - The cookie scheme is the default challenge, so `[Authorize]` and the global fallback policy send anonymous users to the selection page. Nothing redirects to Keycloak automatically.
-- The two methods never fall back to each other. A failed Keycloak sign-in shows `/Account/LoginFailed`.
+- The instances never fall back to each other. A failed Keycloak sign-in shows `/Account/LoginFailed`.
 - Return URLs are used only when `Url.IsLocalUrl` accepts them. Anything else goes to `/`.
-- Password attempts are limited to 5 per minute per client IP (`Program.cs`, policy `login`). Behind a reverse proxy, configure `ForwardedHeaders` so the limiter sees client addresses. Per-account lockout is left to Active Directory.
+
+### Button labels
+
+The button text comes from each instance's `DisplayName` and `Description` in `KeycloakMvc/appsettings.json`:
+
+```json
+"Keycloak": {
+  "Primary":   { "DisplayName": "تسجيل الدخول عبر Keycloak الأول",  "Description": "استخدم حسابك في الخادم الأول للمتابعة." },
+  "Secondary": { "DisplayName": "تسجيل الدخول عبر Keycloak الثاني", "Description": "استخدم حسابك في الخادم الثاني للمتابعة." }
+}
+```
+
+`DisplayName` is required and `Description` is optional. The button text uses `dir="auto"`, so Arabic labels are laid out right to left while the rest of the page stays left to right.
+
+### Pointing an instance at your own Keycloak
+
+Set the instance's `Authority`, `ClientId`, `ClientSecret` and `RequireHttpsMetadata` (and `MetadataAddress` if the app reaches Keycloak by a different address), for example `Keycloak__Secondary__Authority=https://sso2.example.com/realms/partners`. In that Keycloak client, allow these redirect URIs for your app's address:
+
+| Instance | Valid redirect URI | Valid post logout redirect URI |
+|---|---|---|
+| Primary | `https://<app>/signin-oidc` | `https://<app>/signout-callback-oidc` |
+| Secondary | `https://<app>/signin-oidc-secondary` | `https://<app>/signout-callback-oidc-secondary` |
+
+The two realms on `localhost` use different realm names on purpose. Browsers do not separate cookies by port, so two Keycloak servers on one host name with the same realm name would overwrite each other's session cookies.
 
 ### Permitted users
 
@@ -106,19 +141,22 @@ Signing in proves who the user is. The permitted users list decides whether that
 
 ```json
 "PermittedUsers": {
-  "Keycloak": [ "demo" ],
+  "Keycloak": {
+    "Primary": [ "demo", "alice" ],
+    "Secondary": [ "partner" ]
+  },
   "ActiveDirectory": [ "alice@lab.test", "bob@lab.test" ]
 }
 ```
 
-- **Keycloak** entries are Keycloak usernames (`preferred_username`). For Kerberos users, this is usually their Windows account name.
+- **Keycloak** entries are Keycloak usernames (`preferred_username`), listed per instance. For Kerberos users, this is usually their Windows account name. The lists are separate, so `demo` on Secondary is not permitted just because `demo` is permitted on Primary. Startup fails on an instance name other than `Primary` or `Secondary`.
 - **ActiveDirectory** entries are `username@dns.domain`, where the domain is the `Domain` of a configured AD domain. A user named `alice` in another domain does not match.
 - Matching is case-insensitive. The two lists are separate, so the same name in Keycloak and in AD never grants access to the other provider.
 - An empty list permits nobody.
 
 A user who is not on the list sees **Not authorized** (`/Account/NotAuthorized`) with a **Back to sign-in options** button, and gets no session. For Keycloak users, the app also ends the Keycloak session, so they can sign in with another account. Every denial is logged as a warning.
 
-The list is re-read when `appsettings.json` changes, and every request re-checks it. Removing a user therefore ends their session on their next request, without a restart. Environment variables (for example `PermittedUsers__Keycloak__0=demo`) are only read at startup.
+The list is re-read when `appsettings.json` changes, and every request re-checks it. Removing a user therefore ends their session on their next request, without a restart. Environment variables (for example `PermittedUsers__Keycloak__Primary__0=demo`) are only read at startup.
 
 Avoid adding users in `appsettings.json` and then overriding them in an environment file. Configuration merges arrays by index, so entries from the base file can survive. Keep each list in one place.
 
@@ -133,11 +171,12 @@ Both methods produce the same claim types (`KeycloakMvc/Authentication/AppClaimT
 | `app_user_id` | `keycloak\|<issuer>\|<sub>` | `ad\|<domain>\|<objectGUID>` |
 | `app_auth_method` | `KeycloakKerberos` or `KeycloakSso` | `ActiveDirectory` |
 | `app_auth_domain` | issuer URL | AD DNS domain |
+| `app_keycloak_instance` | `Primary` or `Secondary` | not set |
 | `role` | only if Keycloak sends a `role` claim | only from `RoleMappings` |
 
 Use `app_user_id` as the stable user key. It includes the provider and domain, so a Keycloak user and an AD user never share an identity, and neither do `jsmith` in two domains. Linking them would need an explicit mapping policy, which this sample does not include. Signing in to AD grants no roles by itself.
 
-### Keycloak Kerberos (Login with Logged-in User)
+### Keycloak Kerberos (Primary instance)
 
 The app only starts the existing OIDC flow and validates Keycloak's tokens. Keycloak handles Kerberos, but only when its browser flow is configured for it:
 
@@ -151,7 +190,7 @@ The app only starts the existing OIDC flow and validates Keycloak's tokens. Keyc
 With Kerberos configured, the user never sees the Keycloak login page:
 
 ```text
-Sign-in page ── click "Login with Logged-in User" ──► Keycloak (/auth?...&code_challenge=...)
+Sign-in page ── click the Primary button ─────────► Keycloak (/auth?...&code_challenge=...)
                                                          │  401 WWW-Authenticate: Negotiate
                                                          ▼
                               Browser sends the Windows Kerberos ticket automatically
@@ -173,15 +212,15 @@ When Kerberos fails, for example because there is no ticket or the browser does 
 - **Kerberos set to *Alternative*:** Keycloak shows its username and password form.
 - **Kerberos is the only option:** Keycloak shows an error.
 
-The app never falls back to Active Directory on its own. The user can return to the selection page and choose **Login with Username and Password**. The same exchange works inside the iframe, with the cookie limits described in [Embedding in an iframe](#embedding-in-an-iframe).
+The app never falls back to the other Keycloak instance on its own. The user can return to the selection page and choose the other button. The same exchange works inside the iframe, with the cookie limits described in [Embedding in an iframe](#embedding-in-an-iframe).
 
 #### Showing the sign-in method
 
-Without Kerberos configured, Keycloak shows its normal login form and the app reports **Keycloak SSO**. By default the ID token does not say how the user authenticated. The app therefore reports **Keycloak Kerberos SSO** only when the `amr` claim contains the value in `Keycloak:KerberosAmrValue`. This requires a Keycloak version that supports authentication method references:
+Without Kerberos configured, Keycloak shows its normal login form and the app reports **Keycloak SSO**. By default the ID token does not say how the user authenticated. The app therefore reports **Keycloak Kerberos SSO** only when the `amr` claim contains the value in the instance's `KerberosAmrValue` (`Keycloak:Primary:KerberosAmrValue` in this sample). This requires a Keycloak version that supports authentication method references:
 
 1. Set a reference value, for example `kerberos`, on the Kerberos execution.
 2. Add the **Authentication Method Reference (AMR)** mapper to the client with **Add to ID token** turned on.
-3. Set `Keycloak__KerberosAmrValue=kerberos`.
+3. Set `Keycloak__Primary__KerberosAmrValue=kerberos`.
 
 The sample realm and `appsettings.Development.json` already do all three. Keycloak drops the reference once its max age (`default.reference.maxAge`, in seconds) has passed. Without a max age, it is dropped whenever the code is redeemed in a later second than the sign-in, so the realm sets it to the SSO session length.
 
@@ -214,15 +253,17 @@ It runs `kerberos/sso_test.sh` on the compose network, where Keycloak is also re
 
 **From a browser.** Your Windows computer is not joined to `lab.test`, so it needs a ticket from MIT Kerberos, and the browser must reach Keycloak as `keycloak.lab.test`. The steps below are a guide only: the automated check proves the Keycloak and Samba side, but this sample has not tested a browser on Windows.
 
-1. Create `.env` next to `compose.yaml` with `KEYCLOAK_URL=http://keycloak.lab.test:8080`, then run `docker compose up -d --force-recreate`. This sets Keycloak's `KC_HOSTNAME` and the app's `Keycloak__Authority`. Keep the setting in `.env`: running a compose command without it, such as `docker compose run kerberos-client`, recreates Keycloak with `localhost`. Restart `mvc` after Keycloak changes host name, because the app caches the discovery document.
+1. Create `.env` next to `compose.yaml` with `KEYCLOAK_URL=http://keycloak.lab.test:8080`, then run `docker compose up -d --force-recreate`. This sets Keycloak's `KC_HOSTNAME` and the app's `Keycloak__Primary__Authority`. Keep the setting in `.env`: running a compose command without it, such as `docker compose run kerberos-client`, recreates Keycloak with `localhost`. Restart `mvc` after Keycloak changes host name, because the app caches the discovery document.
 2. As administrator, add `127.0.0.1 keycloak.lab.test dc1.lab.test` to `C:\Windows\System32\drivers\etc\hosts`. The `samba` service publishes the KDC on `127.0.0.1:88` (TCP).
 3. Install MIT Kerberos for Windows. Copy the `[libdefaults]`, `[realms]` and `[domain_realm]` sections of `kerberos/krb5.conf` into `C:\ProgramData\MIT\Kerberos5\krb5.ini`, then run `kinit alice@LAB.TEST` with password `Alice!Lab2026`.
 4. In Firefox `about:config`, set `network.negotiate-auth.trusted-uris` to `keycloak.lab.test` and `network.auth.use_sspi` to `false`, so Firefox uses the MIT ticket instead of Windows sign-in.
-5. Open http://localhost:5000 and choose **Login with Logged-in User**. The home page should show **Keycloak Kerberos SSO** for Alice Anderson without a password prompt.
+5. Open http://localhost:5000 and choose the first button (**تسجيل الدخول عبر Keycloak الأول**). The home page should show **Keycloak Kerberos SSO** for Alice Anderson without a password prompt.
 
 Remove `.env` and run `docker compose up -d --force-recreate` to go back to `localhost`.
 
 ### Active Directory (Login with Username and Password)
+
+**Switched off on this branch.** The code below is kept but unused: `Login:PasswordLoginEnabled` is `false`, so `/Account/Login` answers 404, the sign-in page has no password button and the health check skips LDAPS. Setting the flag to `true` makes the page reachable again by URL; adding a button back to `SelectAuthentication.cshtml` is up to you.
 
 Domains are configured under `ActiveDirectory:Domains` in `KeycloakMvc/appsettings.json`. The values there are examples and do not resolve:
 
@@ -297,13 +338,14 @@ To change verbosity, edit `Serilog:MinimumLevel`, for example `"Override": { "Ke
 | Endpoint | Checks | Use |
 |---|---|---|
 | `/health` | The process answers | Liveness probe |
-| `/health/ready` | Keycloak's discovery document. An anonymous LDAPS rootDSE read on each AD domain, which also validates the certificate | Readiness probe, monitoring |
+| `/health/ready` | Each Keycloak instance's discovery document (`keycloak-primary`, `keycloak-secondary`). An anonymous LDAPS rootDSE read on each AD domain, which also validates the certificate; skipped while `PasswordLoginEnabled` is `false` | Readiness probe, monitoring |
 
 Both endpoints are anonymous and return JSON:
 
 ```json
 {"status":"Degraded","durationMs":49,"checks":[
-  {"name":"keycloak","status":"Healthy","description":"Keycloak is reachable.", ...},
+  {"name":"keycloak-primary","status":"Healthy","description":"Keycloak Primary is reachable.", ...},
+  {"name":"keycloak-secondary","status":"Healthy","description":"Keycloak Secondary is reachable.", ...},
   {"name":"active-directory","status":"Degraded","description":"Unreachable: ops.example.com.",
    "data":{"lab.test":"reachable","ops.example.com":"unreachable"}}]}
 ```
@@ -379,7 +421,7 @@ Red Hat Single Sign-On 7.x uses the same realm headers and the same MVC changes,
 | What | This sample (Keycloak 26) | RH-SSO 7.x |
 |---|---|---|
 | Admin console | `http://host:8080/admin` | `http://host:8080/auth/admin` |
-| Realm URL / MVC `Keycloak:Authority` | `http://host:8080/realms/mvc-sample` | `http://host:8080/auth/realms/mvc-sample` |
+| Realm URL / MVC `Keycloak:<instance>:Authority` | `http://host:8080/realms/mvc-sample` | `http://host:8080/auth/realms/mvc-sample` |
 | `kcadm.sh` server URL | `http://localhost:8080` | `http://localhost:8080/auth` |
 | `kcadm.sh` path | `/opt/keycloak/bin/kcadm.sh` | `$RHSSO_HOME/bin/kcadm.sh` (OpenShift image: `/opt/eap/bin/kcadm.sh`) |
 | Realm JSON import | `--import-realm` on startup | Admin console **Add realm → Import**, or the `keycloak.import` system property |
@@ -405,11 +447,11 @@ $RHSSO_HOME/bin/kcadm.sh update realms/mvc-sample \
   -s "browserSecurityHeaders.xFrameOptions="
 ```
 
-In the MVC app, point `Keycloak:Authority` (and `Keycloak:MetadataAddress`, if set) at the `/auth/realms/...` URL. `FrameAncestors` and the antiforgery change stay the same. Real RH-SSO deployments usually run on HTTPS and on a different domain from the host page. Embedding then also depends on the browser allowing third-party cookies, so a popup or top-level login is more reliable.
+In the MVC app, point the instance's `Authority` (and `MetadataAddress`, if set) at the `/auth/realms/...` URL. `FrameAncestors` and the antiforgery change stay the same. Real RH-SSO deployments usually run on HTTPS and on a different domain from the host page. Embedding then also depends on the browser allowing third-party cookies, so a popup or top-level login is more reliable.
 
 ## Development only
 
-This sample uses HTTP, Keycloak development mode, its local development database, a Samba lab domain controller, and committed demo credentials. For production, use HTTPS, secure cookie defaults, an external supported database, secret management, production Keycloak startup and persistent protected data-protection keys. Enable `Keycloak__RequireHttpsMetadata=true` and supply the production authority and secret.
+This sample uses HTTP, Keycloak development mode, its local development database, a Samba lab domain controller, and committed demo credentials. For production, use HTTPS, secure cookie defaults, an external supported database, secret management, production Keycloak startup and persistent protected data-protection keys. Enable `RequireHttpsMetadata=true` for each instance (`Keycloak__Primary__RequireHttpsMetadata`, `Keycloak__Secondary__RequireHttpsMetadata`) and supply the production authorities and secrets.
 
 ## References
 

@@ -1,4 +1,5 @@
 using System.DirectoryServices.Protocols;
+using KeycloakMvc.Authentication;
 using KeycloakMvc.Authentication.ActiveDirectory;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
@@ -8,13 +9,17 @@ namespace KeycloakMvc.HealthChecks;
 /// <summary>
 /// Reads each configured domain controller's rootDSE anonymously over LDAPS, which checks the
 /// connection and the server certificate without any credentials. An unreachable domain only
-/// degrades the application, because the other sign-in methods still work.
+/// degrades the application, because the other sign-in methods still work. Nothing is checked
+/// while password sign-in is disabled.
 /// </summary>
-public sealed class ActiveDirectoryHealthCheck(IOptions<ActiveDirectoryOptions> options) : IHealthCheck
+public sealed class ActiveDirectoryHealthCheck(
+    IOptions<ActiveDirectoryOptions> options, IOptions<LoginOptions> loginOptions) : IHealthCheck
 {
     public async Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context, CancellationToken cancellationToken = default)
     {
+        if (!loginOptions.Value.PasswordLoginEnabled)
+            return HealthCheckResult.Healthy("Password sign-in is disabled.");
         var domains = options.Value.Domains;
         if (domains.Count == 0)
             return HealthCheckResult.Healthy("No Active Directory domains are configured.");

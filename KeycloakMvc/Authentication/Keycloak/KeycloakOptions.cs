@@ -2,9 +2,17 @@ using System.ComponentModel.DataAnnotations;
 
 namespace KeycloakMvc.Authentication.Keycloak;
 
+/// <summary>Settings for one Keycloak instance, bound from Keycloak:Primary or Keycloak:Secondary.</summary>
 public sealed class KeycloakOptions
 {
     public const string SectionName = "Keycloak";
+
+    /// <summary>Button title on the sign-in page.</summary>
+    [Required]
+    public string DisplayName { get; set; } = string.Empty;
+
+    /// <summary>Optional line under the button title.</summary>
+    public string? Description { get; set; }
 
     /// <summary>Realm URL, for example https://sso.example.com/realms/mvc-sample. Also the expected token issuer.</summary>
     [Required, Url]

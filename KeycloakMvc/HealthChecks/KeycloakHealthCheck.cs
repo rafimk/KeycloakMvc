@@ -4,23 +4,28 @@ using Microsoft.Extensions.Options;
 
 namespace KeycloakMvc.HealthChecks;
 
-/// <summary>Checks that Keycloak's discovery document can be downloaded.</summary>
-public sealed class KeycloakHealthCheck(HttpClient httpClient, IOptions<KeycloakOptions> options) : IHealthCheck
+/// <summary>Checks that one Keycloak instance's discovery document can be downloaded.</summary>
+public sealed class KeycloakHealthCheck(
+    IHttpClientFactory httpClientFactory, IOptionsMonitor<KeycloakOptions> options, KeycloakInstance instance) : IHealthCheck
 {
+    public const string HttpClientName = "keycloak-health";
+
     public async Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context, CancellationToken cancellationToken = default)
     {
         try
         {
-            using var response = await httpClient.GetAsync(options.Value.DiscoveryDocumentUrl, cancellationToken);
+            var httpClient = httpClientFactory.CreateClient(HttpClientName);
+            var discoveryDocumentUrl = options.Get(instance.Scheme).DiscoveryDocumentUrl;
+            using var response = await httpClient.GetAsync(discoveryDocumentUrl, cancellationToken);
             return response.IsSuccessStatusCode
-                ? HealthCheckResult.Healthy("Keycloak is reachable.")
+                ? HealthCheckResult.Healthy($"Keycloak {instance.Name} is reachable.")
                 : new HealthCheckResult(context.Registration.FailureStatus,
-                    $"Keycloak returned HTTP {(int)response.StatusCode}.");
+                    $"Keycloak {instance.Name} returned HTTP {(int)response.StatusCode}.");
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException && !cancellationToken.IsCancellationRequested)
         {
-            return new HealthCheckResult(context.Registration.FailureStatus, "Keycloak is unreachable.", ex);
+            return new HealthCheckResult(context.Registration.FailureStatus, $"Keycloak {instance.Name} is unreachable.", ex);
         }
     }
 }

@@ -5,13 +5,15 @@ import json
 import pathlib
 import re
 import subprocess
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 APP = "http://localhost:5000"
 SELECT = f"{APP}/Account/SelectAuthentication"
+KEYCLOAK = {"Primary": "http://localhost:8080/", "Secondary": "http://localhost:8081/"}
+PRIMARY_LABEL = "تسجيل الدخول عبر Keycloak الأول"
+SECONDARY_LABEL = "تسجيل الدخول عبر Keycloak الثاني"
 
 # Browsers treat localhost as a secure context. Mirror that behavior for this
 # localhost-only HTTP smoke test; Keycloak sets Secure cookies on localhost.
@@ -27,119 +29,85 @@ def post(url, fields):
 def antiforgery(body):
     return html.unescape(re.search(r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', body).group(1))
 
-def keycloak_login(return_url):
-    """Choose "Login with Logged-in User" and return the Keycloak login page.
+def keycloak_login(instance, return_url):
+    """Choose the instance's button on the sign-in page and return its Keycloak login page.
 
-    With no Kerberos ticket, Keycloak answers 401 Negotiate with a page that submits itself to continue
-    to the password form. Submit it, as a browser would."""
+    Without a Kerberos ticket, the Primary instance answers 401 Negotiate with a page that submits itself
+    to continue to the password form. Submit it, as a browser would."""
     page = get(f"{SELECT}?ReturnUrl={urllib.parse.quote(return_url)}").read().decode()
     try:
-        response = post(f"{APP}/Account/LoginWithLoggedUser", {"__RequestVerificationToken": antiforgery(page), "returnUrl": return_url})
+        response = post(f"{APP}/Account/LoginWithKeycloak", {"__RequestVerificationToken": antiforgery(page),
+                                                             "instance": instance, "returnUrl": return_url})
     except urllib.error.HTTPError as error:
-        assert error.code == 401 and error.headers["WWW-Authenticate"] == "Negotiate", error
+        assert instance == "Primary" and error.code == 401 and error.headers["WWW-Authenticate"] == "Negotiate", error
         action = html.unescape(re.search(r'ACTION="([^"]+)"', error.read().decode()).group(1))
         response = post(action, {})
-    assert response.url.startswith("http://localhost:8080/"), response.url
+    assert response.url.startswith(KEYCLOAK[instance]), response.url
     return response
 
-def ad_login(fields, return_url="/"):
-    """Submit the username/password form, waiting out the login rate limit if needed."""
-    deadline = time.time() + 75
-    while True:
-        page = get(f"{APP}/Account/Login?ReturnUrl={urllib.parse.quote(return_url)}").read().decode()
-        try:
-            response = post(f"{APP}/Account/Login", {"__RequestVerificationToken": antiforgery(page),
-                                                     "ReturnUrl": return_url, **fields})
-            url, body = response.url, response.read().decode()
-        except urllib.error.HTTPError as error:
-            url, body = error.url, error.read().decode()
-        if "Too many sign-in attempts" not in body or time.time() > deadline:
-            return url, body
-        time.sleep(5)
-
-def keycloak_password_login(username, password, return_url="/"):
-    page = keycloak_login(return_url).read().decode()
+def keycloak_password_login(instance, username, password, return_url="/"):
+    page = keycloak_login(instance, return_url).read().decode()
     action = html.unescape(re.search(r'<form[^>]*action="([^"]+)"', page).group(1))
     response = post(action, {"username": username, "password": password, "credentialId": ""})
     return response.url, response.read().decode()
 
-# Health: liveness, and readiness with Keycloak and each AD domain.
+def logout(page):
+    response = post(f"{APP}/Account/Logout", {"__RequestVerificationToken": antiforgery(page)})
+    assert response.url == SELECT, f"Logout went to {response.url}"
+
+# Health: liveness, and readiness with both Keycloak instances. Password sign-in is disabled.
 live = json.loads(get(f"{APP}/health").read())
 assert live["status"] == "Healthy", live
 ready = json.loads(get(f"{APP}/health/ready").read())
 checks = {check["name"]: check for check in ready["checks"]}
-assert checks["keycloak"]["status"] == "Healthy", ready
-assert checks["active-directory"]["data"]["lab.test"] == "reachable", ready
-assert checks["active-directory"]["data"]["ops.example.com"] == "unreachable", ready
-assert ready["status"] == "Degraded", ready
+assert checks["keycloak-primary"]["status"] == "Healthy", ready
+assert checks["keycloak-secondary"]["status"] == "Healthy", ready
+assert checks["active-directory"]["description"] == "Password sign-in is disabled.", ready
+assert ready["status"] == "Healthy", ready
 
-# Anonymous users see the selection page, not Keycloak, and the requested URL is preserved.
+# Anonymous users see the selection page with one button per Keycloak instance, and the requested URL is preserved.
 response = get(f"{APP}/Account/Profile")
 assert response.url == f"{SELECT}?ReturnUrl=%2FAccount%2FProfile", response.url
 body = response.read().decode()
-assert "Login with Logged-in User" in body and "Login with Username and Password" in body
+assert PRIMARY_LABEL in body and SECONDARY_LABEL in body, "Keycloak buttons missing"
+assert 'value="Primary"' in body and 'value="Secondary"' in body
+assert "Login with Username and Password" not in body, "Password option still shown"
 
-# Manual login page lists the configured domains and rejects bad input with generic messages.
-body = get(f"{APP}/Account/Login").read().decode()
-assert 'value="lab.test"' in body and 'value="ops.example.com"' in body, "Configured domains missing"
-assert 'type="password"' in body
-url, body = ad_login({"UserName": "alice", "Password": "", "Domain": "lab.test"})
-assert "Enter your password." in body, "Empty password was not rejected"
-url, body = ad_login({"UserName": "alice", "Password": "x", "Domain": "evil.example.org"})
-assert "Select a domain from the list." in body, "Unconfigured domain was accepted"
-# The ops.example.com sample domain does not exist, so its directory is unreachable.
-url, body = ad_login({"UserName": "jsmith", "Password": "not-a-real-password", "Domain": "ops.example.com"})
-assert "Sign-in is temporarily unavailable" in body, "Unreachable domain controller not reported"
-assert "not-a-real-password" not in body, "Password was echoed back"
+# The Active Directory password pages are off.
 try:
-    post(f"{APP}/Account/Login", {"UserName": "alice", "Password": "x", "Domain": "lab.test"})
-    raise AssertionError("Login POST without antiforgery token was accepted")
+    get(f"{APP}/Account/Login")
+    raise AssertionError("Password login page is reachable")
 except urllib.error.HTTPError as error:
-    assert error.code == 400
+    assert error.code == 404, error
+try:
+    post(f"{APP}/Account/Login", {"__RequestVerificationToken": antiforgery(body),
+                                  "UserName": "alice", "Password": "Alice!Lab2026", "Domain": "lab.test"})
+    raise AssertionError("Password login POST was accepted")
+except urllib.error.HTTPError as error:
+    assert error.code == 404, error
 
-# Active Directory sign-in against the local Samba lab domain (lab.test).
-generic = "The username, password or domain is incorrect."
-url, body = ad_login({"UserName": "bob", "Password": "wrong-password", "Domain": "lab.test"})
-assert generic in body, "Wrong password was not rejected"
-url, body = ad_login({"UserName": "carol", "Password": "Carol!Lab2026", "Domain": "lab.test"})
-assert generic in body, "Disabled account was not rejected"
-url, body = ad_login({"UserName": "OPS\\alice", "Password": "Alice!Lab2026", "Domain": "lab.test"})
-assert generic in body, "Username from another domain was accepted"
-url, body = ad_login({"UserName": "LAB\\alice", "Password": "Alice!Lab2026", "Domain": "lab.test"}, "/Account/Profile")
-assert url == f"{APP}/Account/Profile", f"AD login did not return to the requested page: {url}"
-assert "Signed in as <strong>alice</strong>" in body, "AD login did not reach authenticated profile"
-assert re.search(r"app_user_id</td><td[^>]*>ad\|lab\.test\|[0-9a-f-]{36}<", body), "AD user id claim missing"
-assert re.search(r"<td>role</td><td[^>]*>Admin<", body), "AD group role mapping missing"
-home = get(f"{APP}/").read().decode()
-assert "Active Directory" in home and "lab.test" in home and "Alice Anderson" in home, "Home page AD details missing"
-logout = post(f"{APP}/Account/Logout", {"__RequestVerificationToken": antiforgery(home)})
-assert logout.url == SELECT, f"AD logout went to {logout.url}"
-assert get(f"{APP}/").url.startswith(SELECT), "AD session survived logout"
-url, body = ad_login({"UserName": "bob", "Password": "Bob!Lab2026", "Domain": "lab.test"})
-assert url == f"{APP}/", url
-assert re.search(r"Welcome back, Bob Brown!", body) and "Admin" not in body
-token = antiforgery(body)
-post(f"{APP}/Account/Logout", {"__RequestVerificationToken": token})
+# An unknown instance is rejected.
+try:
+    post(f"{APP}/Account/LoginWithKeycloak", {"__RequestVerificationToken": antiforgery(body), "instance": "Other"})
+    raise AssertionError("Unknown Keycloak instance was accepted")
+except urllib.error.HTTPError as error:
+    assert error.code == 400, error
 
-# Valid AD credentials that are not on the permitted users list get no session.
-url, body = ad_login({"UserName": "dave", "Password": "Dave!Lab2026", "Domain": "lab.test"})
-assert url == f"{APP}/Account/NotAuthorized", f"Unpermitted AD user reached {url}"
-assert "Not authorized" in body and "Back to sign-in options" in body
-assert get(f"{APP}/").url.startswith(SELECT), "Unpermitted AD user got a session"
-
-# A Keycloak user who is not permitted gets no session, and their Keycloak session is ended.
-url, body = keycloak_password_login("guest", "Guest123!")
+# Primary: a Keycloak user who is not permitted gets no session, and their Keycloak session is ended.
+url, body = keycloak_password_login("Primary", "guest", "Guest123!")
 assert url == f"{APP}/Account/NotAuthorized", f"Unpermitted Keycloak user reached {url}"
 assert get(f"{APP}/").url.startswith(SELECT), "Unpermitted Keycloak user got a session"
-assert 'name="password"' in keycloak_login("/").read().decode(), "Unpermitted user's Keycloak session survived"
+assert 'name="password"' in keycloak_login("Primary", "/").read().decode(), "Unpermitted user's Keycloak session survived"
 
-# Keycloak login through the existing OIDC + PKCE flow returns to the original URL.
-url, body = keycloak_password_login("demo", "Demo123!", "/Account/Profile")
+# Primary: OIDC + PKCE sign-in returns to the original URL.
+url, body = keycloak_password_login("Primary", "demo", "Demo123!", "/Account/Profile")
 assert url == f"{APP}/Account/Profile", url
 assert "Signed in as <strong>demo</strong>" in body, "Login did not reach authenticated profile"
-assert "app_auth_method" in body and "KeycloakSso" in body, "Authentication method claim missing"
+assert "KeycloakSso" in body, "Authentication method claim missing"
+assert re.search(r"app_keycloak_instance</td><td[^>]*>Primary<", body), "Keycloak instance claim missing"
+assert "http://localhost:8080/realms/mvc-sample" in body, "Primary issuer missing"
 home = get(f"{APP}/").read().decode()
-assert "Keycloak SSO" in home and "Username" in home, "Home page does not show the session details"
+assert "Keycloak SSO" in home and "Keycloak (Primary)" in home, "Home page does not show the session details"
 
 # Signed-in users skip the selection page; external return URLs are ignored.
 response = get(f"{SELECT}?ReturnUrl=https%3A%2F%2Fevil.example.org%2F")
@@ -147,34 +115,41 @@ assert response.url == f"{APP}/", f"Open redirect: {response.url}"
 response = get(f"{SELECT}?ReturnUrl=%2F%2Fevil.example.org")
 assert response.url == f"{APP}/", f"Open redirect: {response.url}"
 
-# Keycloak logout ends both sessions and returns to the selection page.
-logout = post(f"{APP}/Account/Logout", {"__RequestVerificationToken": antiforgery(home)})
-assert logout.url == SELECT, logout.url
-assert 'name="password"' in keycloak_login("/").read().decode(), "Keycloak session survived logout"
+# Primary logout ends both sessions and returns to the selection page.
+logout(home)
+assert 'name="password"' in keycloak_login("Primary", "/").read().decode(), "Primary Keycloak session survived logout"
 
-# lab.test users also sign in to Keycloak with their AD password, through LDAP user federation.
-url, body = keycloak_password_login("alice", "Alice!Lab2026", "/Account/Profile")
+# Primary: lab.test users also sign in with their AD password, through LDAP user federation.
+url, body = keycloak_password_login("Primary", "alice", "Alice!Lab2026", "/Account/Profile")
 assert "Signed in as <strong>alice</strong>" in body and "KeycloakSso" in body, "Federated AD user did not sign in"
-home = get(f"{APP}/").read().decode()
-post(f"{APP}/Account/Logout", {"__RequestVerificationToken": antiforgery(home)})
-url, body = keycloak_password_login("carol", "Carol!Lab2026")
-assert url.startswith("http://localhost:8080/") and 'name="password"' in body, "Disabled AD account signed in to Keycloak"
+logout(get(f"{APP}/").read().decode())
+url, body = keycloak_password_login("Primary", "carol", "Carol!Lab2026")
+assert url.startswith(KEYCLOAK["Primary"]) and 'name="password"' in body, "Disabled AD account signed in to Keycloak"
 
-# Kerberos SSO through Keycloak, from a container that holds a lab.test ticket (kerberos/sso_test.sh).
+# Secondary: permitted users are per instance. "demo" exists there too but is only permitted on Primary.
+url, body = keycloak_password_login("Secondary", "demo", "Demo123!")
+assert url == f"{APP}/Account/NotAuthorized", f"Secondary demo user reached {url}"
+assert get(f"{APP}/").url.startswith(SELECT), "Unpermitted Secondary user got a session"
+assert 'name="password"' in keycloak_login("Secondary", "/").read().decode(), "Unpermitted user's Secondary session survived"
+
+# Secondary: sign-in goes to the second instance and its own callback path.
+url, body = keycloak_password_login("Secondary", "partner", "Partner123!", "/Account/Profile")
+assert url == f"{APP}/Account/Profile", url
+assert "Signed in as <strong>partner</strong>" in body, "Secondary login did not reach authenticated profile"
+assert re.search(r"app_keycloak_instance</td><td[^>]*>Secondary<", body), "Secondary instance claim missing"
+assert "http://localhost:8081/realms/mvc-secondary" in body, "Secondary issuer missing"
+home = get(f"{APP}/").read().decode()
+assert "Keycloak (Secondary)" in home and "Partner User" in home, "Home page does not show the Secondary session"
+
+# Secondary logout ends its Keycloak session.
+logout(home)
+assert get(f"{APP}/").url.startswith(SELECT), "Secondary session survived logout"
+assert 'name="password"' in keycloak_login("Secondary", "/").read().decode(), "Secondary Keycloak session survived logout"
+
+# Kerberos SSO through the Primary instance, from a container that holds a lab.test ticket (kerberos/sso_test.sh).
 subprocess.run(["docker", "compose", "run", "--rm", "-T", "kerberos-client"],
                cwd=pathlib.Path(__file__).resolve().parent.parent, check=True)
 
-# Password attempts are rate limited per client (5 per fixed one-minute window, so 11
-# back-to-back attempts must hit the limit even if one window boundary passes).
-token = antiforgery(get(f"{APP}/Account/Login").read().decode())
-for _ in range(11):
-    body = post(f"{APP}/Account/Login", {"__RequestVerificationToken": token, "UserName": "jsmith",
-                                         "Password": "x", "Domain": "ops.example.com"}).read().decode()
-    if "Too many sign-in attempts" in body:
-        break
-else:
-    raise AssertionError("Login attempts were not rate limited")
-
-print("PASS: health checks, selection page, return URL, AD form validation, AD sign-in/rejections/roles/logout, "
-      "permitted users (AD and Keycloak), PKCE Keycloak login, claims, open-redirect protection, "
-      "Keycloak logout, LDAP federation, Kerberos SSO and login rate limiting")
+print("PASS: health checks, selection page with both Keycloak instances, password login disabled, "
+      "return URL, permitted users per instance, PKCE login and logout on both instances, claims, "
+      "open-redirect protection, LDAP federation and Kerberos SSO")

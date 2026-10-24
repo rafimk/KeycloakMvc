@@ -1,3 +1,4 @@
+using KeycloakMvc.Authentication.Keycloak;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
@@ -10,16 +11,20 @@ public static class HealthCheckExtensions
 
     public static IServiceCollection AddAppHealthChecks(this IServiceCollection services)
     {
-        services.AddHttpClient<KeycloakHealthCheck>(client => client.Timeout = TimeSpan.FromSeconds(5));
-        services.AddHealthChecks()
-            .AddCheck("self", () => HealthCheckResult.Healthy("The application is running."), tags: [LiveTag])
-            .AddCheck<KeycloakHealthCheck>("keycloak", tags: [ReadyTag])
-            .AddCheck<ActiveDirectoryHealthCheck>("active-directory", tags: [ReadyTag]);
+        services.AddHttpClient(KeycloakHealthCheck.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(5));
+        var checks = services.AddHealthChecks()
+            .AddCheck("self", () => HealthCheckResult.Healthy("The application is running."), tags: [LiveTag]);
+        foreach (var instance in KeycloakInstances.All)
+        {
+            checks.AddTypeActivatedCheck<KeycloakHealthCheck>(
+                $"keycloak-{instance.Name.ToLowerInvariant()}", null, [ReadyTag], instance);
+        }
+        checks.AddCheck<ActiveDirectoryHealthCheck>("active-directory", tags: [ReadyTag]);
         return services;
     }
 
     /// <summary>
-    /// /health: liveness (the process answers). /health/ready: Keycloak and Active Directory.
+    /// /health: liveness (the process answers). /health/ready: each Keycloak instance and Active Directory.
     /// Degraded still returns HTTP 200; Unhealthy returns 503.
     /// </summary>
     public static IEndpointRouteBuilder MapAppHealthChecks(this IEndpointRouteBuilder endpoints)

@@ -1,3 +1,5 @@
+using System.Text.Encodings.Web;
+using System.Text.Unicode;
 using KeycloakMvc.Authentication;
 using KeycloakMvc.HealthChecks;
 using KeycloakMvc.Logging;
@@ -12,6 +14,9 @@ try
     var builder = WebApplication.CreateBuilder(args);
     builder.AddAppLogging();
     builder.Services.AddControllersWithViews();
+    // Writes the Arabic sign-in labels as characters instead of &#x...; entities.
+    builder.Services.AddWebEncoders(options =>
+        options.TextEncoderSettings = new TextEncoderSettings(UnicodeRanges.BasicLatin, UnicodeRanges.Arabic));
     builder.Services.AddFrameAncestors();
     builder.Services.AddAppAuthentication();
     builder.Services.AddAppHealthChecks();

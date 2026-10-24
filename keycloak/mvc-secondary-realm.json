@@ -1,0 +1,48 @@
+{
+  "realm": "mvc-secondary",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "browserSecurityHeaders": {
+    "contentSecurityPolicy": "frame-src 'self'; frame-ancestors 'self' http://localhost:5500; object-src 'none';",
+    "xFrameOptions": "",
+    "xContentTypeOptions": "nosniff",
+    "xRobotsTag": "none",
+    "referrerPolicy": "no-referrer",
+    "strictTransportSecurity": "max-age=31536000; includeSubDomains"
+  },
+  "clients": [{
+    "clientId": "mvc-app",
+    "name": ".NET MVC sample",
+    "enabled": true,
+    "protocol": "openid-connect",
+    "publicClient": false,
+    "secret": "mvc-secondary-local-secret",
+    "standardFlowEnabled": true,
+    "directAccessGrantsEnabled": false,
+    "redirectUris": ["http://localhost:5000/signin-oidc-secondary"],
+    "webOrigins": ["http://localhost:5000"],
+    "attributes": {
+      "pkce.code.challenge.method": "S256",
+      "post.logout.redirect.uris": "http://localhost:5000/signout-callback-oidc-secondary"
+    },
+    "defaultClientScopes": ["profile", "email", "roles", "web-origins"]
+  }],
+  "users": [{
+    "username": "partner",
+    "enabled": true,
+    "emailVerified": true,
+    "firstName": "Partner",
+    "lastName": "User",
+    "email": "partner@example.com",
+    "credentials": [{"type": "password", "value": "Partner123!", "temporary": false}]
+  }, {
+    "username": "demo",
+    "enabled": true,
+    "emailVerified": true,
+    "firstName": "Second",
+    "lastName": "Demo",
+    "email": "demo@secondary.example.com",
+    "credentials": [{"type": "password", "value": "Demo123!", "temporary": false}]
+  }]
+}

@@ -13,15 +13,20 @@ namespace KeycloakMvc.Authentication;
 public static class AuthenticationExtensions
 {
     /// <summary>
-    /// Registers hybrid sign-in: a local cookie session created either by Keycloak (OIDC) or by an
-    /// Active Directory password check, limited to the permitted users list.
+    /// Registers sign-in: a local cookie session created by one of the Keycloak instances (OIDC),
+    /// limited to the permitted users list. The Active Directory password check stays registered,
+    /// but its pages answer 404 unless Login:PasswordLoginEnabled is true.
     /// </summary>
     public static IServiceCollection AddAppAuthentication(this IServiceCollection services)
     {
-        services.AddOptions<KeycloakOptions>()
-            .BindConfiguration(KeycloakOptions.SectionName)
-            .ValidateDataAnnotations()
-            .ValidateOnStart();
+        // Each instance's settings are named options, keyed by its OIDC scheme name.
+        foreach (var instance in KeycloakInstances.All)
+        {
+            services.AddOptions<KeycloakOptions>(instance.Scheme)
+                .BindConfiguration(instance.SectionName)
+                .ValidateDataAnnotations()
+                .ValidateOnStart();
+        }
         services.AddOptions<LoginOptions>()
             .BindConfiguration(LoginOptions.SectionName)
             .ValidateDataAnnotations()
@@ -40,15 +45,19 @@ public static class AuthenticationExtensions
         services.AddScoped<AppCookieEvents>();
         services.AddScoped<KeycloakOpenIdConnectEvents>();
 
-        // Anonymous users get the cookie challenge (the selection page). Keycloak is only
-        // reached when the user explicitly chooses it in AccountController.LoginWithLoggedUser.
-        services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
-            .AddCookie()
-            .AddOpenIdConnect();
+        // Anonymous users get the cookie challenge (the selection page). A Keycloak instance is only
+        // reached when the user explicitly chooses it in AccountController.LoginWithKeycloak.
+        var authentication = services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+            .AddCookie();
         services.AddOptions<CookieAuthenticationOptions>(CookieAuthenticationDefaults.AuthenticationScheme)
             .Configure<IOptions<LoginOptions>, IHostEnvironment>(ConfigureCookie);
-        services.AddOptions<OpenIdConnectOptions>(OpenIdConnectDefaults.AuthenticationScheme)
-            .Configure<IOptions<KeycloakOptions>>(ConfigureKeycloak);
+        foreach (var instance in KeycloakInstances.All)
+        {
+            authentication.AddOpenIdConnect(instance.Scheme, _ => { });
+            services.AddOptions<OpenIdConnectOptions>(instance.Scheme)
+                .Configure<IOptionsMonitor<KeycloakOptions>>((options, keycloak) =>
+                    ConfigureKeycloak(options, instance, keycloak.Get(instance.Scheme)));
+        }
 
         // Every page requires a signed-in user unless it opts out with [AllowAnonymous].
         services.AddAuthorizationBuilder()
@@ -101,9 +110,12 @@ public static class AuthenticationExtensions
             : CookieSecurePolicy.Always;
     }
 
-    private static void ConfigureKeycloak(OpenIdConnectOptions options, IOptions<KeycloakOptions> keycloakOptions)
+    private static void ConfigureKeycloak(OpenIdConnectOptions options, KeycloakInstance instance, KeycloakOptions keycloak)
     {
-        var keycloak = keycloakOptions.Value;
+        // Separate paths, so each handler only answers callbacks from its own Keycloak instance.
+        options.CallbackPath = instance.CallbackPath;
+        options.SignedOutCallbackPath = instance.SignedOutCallbackPath;
+        options.RemoteSignOutPath = instance.RemoteSignOutPath;
         options.Authority = keycloak.Authority;
         options.MetadataAddress = keycloak.DiscoveryDocumentUrl;
         options.ClientId = keycloak.ClientId;

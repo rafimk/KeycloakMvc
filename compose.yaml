@@ -33,13 +33,37 @@ services:
       timeout: 5s
       start_period: 60s
       retries: 12
+  # Second, independent Keycloak instance behind the sign-in page's second button. No Kerberos or
+  # LDAP federation: its users live in the realm only.
+  keycloak-secondary:
+    image: quay.io/keycloak/keycloak:26.8.0
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin-local-password
+      KC_HOSTNAME: http://localhost:8081
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "127.0.0.1:8081:8080"
+    volumes:
+      - ./keycloak/mvc-secondary-realm.json:/opt/keycloak/data/import/mvc-secondary-realm.json:ro
+      - keycloak-secondary-data:/opt/keycloak/data
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000; printf 'GET /health/ready HTTP/1.0\r\n\r\n' >&3; grep -q '200 OK' <&3"]
+      interval: 10s
+      timeout: 5s
+      start_period: 60s
+      retries: 24
   mvc:
     build: .
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_HTTP_PORTS: "8080"
-      Keycloak__Authority: ${KEYCLOAK_URL:-http://localhost:8080}/realms/mvc-sample
-      Keycloak__MetadataAddress: http://keycloak:8080/realms/mvc-sample/.well-known/openid-configuration
+      Keycloak__Primary__Authority: ${KEYCLOAK_URL:-http://localhost:8080}/realms/mvc-sample
+      Keycloak__Primary__MetadataAddress: http://keycloak:8080/realms/mvc-sample/.well-known/openid-configuration
+      Keycloak__Secondary__Authority: http://localhost:8081/realms/mvc-secondary
+      Keycloak__Secondary__MetadataAddress: http://keycloak-secondary:8080/realms/mvc-secondary/.well-known/openid-configuration
       # The lab domain itself is configured in appsettings.Development.json. libldap trusts the
       # lab CA for LDAPS; a real deployment adds its CA to the system store instead.
       LDAPTLS_CACERT: /etc/lab-ca/lab-ca.pem
@@ -50,6 +74,8 @@ services:
       - samba-ca:/etc/lab-ca:ro
     depends_on:
       keycloak:
+        condition: service_healthy
+      keycloak-secondary:
         condition: service_healthy
       samba:
         condition: service_healthy
@@ -88,6 +114,7 @@ services:
         condition: service_healthy
 volumes:
   keycloak-data:
+  keycloak-secondary-data:
   mvc-keys:
   samba-ca:
   samba-keytab:

@@ -24,6 +24,7 @@ public class HomeController : Controller
                 _ => "Keycloak SSO",
             },
             IsActiveDirectory = method == AppAuthenticationMethods.ActiveDirectory,
+            KeycloakInstance = User.FindFirstValue(AppClaimTypes.KeycloakInstance),
             Domain = User.FindFirstValue(AppClaimTypes.AuthenticationDomain),
         });
     }
